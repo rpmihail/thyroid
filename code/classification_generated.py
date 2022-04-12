@@ -37,51 +37,19 @@ use_cuda = torch.cuda.is_available()
 
 class thyroidDataset(Dataset):
     def __init__(self, split):
-        self.all_data = []
-        self.compositions = {'Unknown':0, 'cystic':1,
-                             'predominantly solid':2,
-                             'solid':3, 'spongiform appareance':4}
-        self.echogenicities = {'Unknown':0, 'hyperechogenecity':1,
-                             'hypoechogenecity':2, 'isoechogenicity':3,
-                             'marked hypoechogenecity':4}
-        self.margins = {'Unknown':0, 'ill- defined':1, 'microlobulated':2,
-                        'spiculated':3, 'well defined smooth':4}
-        self.calcifications = {'macrocalcification':0, 'microcalcification':1, 'non':2}
-        self.types ={'benign':0, 'malign':1}
-        for t_type in ['benign', 'malign']:
-            root_dir=Path('../data/' + split + '/' + t_type).expanduser().resolve().absolute() 
-            files = list(root_dir.glob("*"))
-            labels = [t_type] * len(files)
-            data_list = list(zip(files, labels))
-            self.all_data.extend(data_list)
-        random.shuffle(self.all_data)
-        self.cases, self.types = zip(*self.all_data)
-        print("number of data items:" + str(len(self.cases)))
-            
-
+        with open('labels_list_' + split + '_gen.txt') as f:
+            self.samples = f.read().splitlines() 
+    
     def __len__(self):
-        return len(self.cases)
+        return len(self.samples)
   
     def __getitem__(self, idx):
-        labels = np.zeros(15, dtype = float)
-        xml_data = ET.parse(list(self.cases[idx].glob('*[0-9].xml'))[0]).getroot()
-        for x in xml_data:
-            if x.tag=='composition' and x.text is not None:
-                composition = x.text
-                if self.compositions[composition] > 0:
-                    labels[self.compositions[composition] - 1] += 1.0
-            if x.tag=='echogenicity' and x.text is not None:
-                echogenicity = x.text
-                if self.echogenicities[echogenicity] > 0:
-                    labels[self.echogenicities[echogenicity] + 3] += 1.0
-            if x.tag=='margins' and x.text is not None:
-                margin = x.text
-                if self.margins[margin] > 0:
-                    labels[self.margins[margin] + 7] += 1.0
-            if x.tag=='calcifications' and x.text is not None:
-                calcification = x.text
-                labels[self.calcifications[calcification] + 12] += 1.0
-        im_name = list(self.cases[idx].glob('*[0-9].jpg'))[0]
+        data_list = self.samples[idx].split(', ')
+        name = data_list[0]
+        labels = data_list[1:16]
+        labels = [float(element) for element in labels]
+        labels = np.array(labels)
+        im_name = os.path.join('/home/ahana/thyroid/code/generated_images1', name + '.jpg')
         im = cv2.imread(str(im_name))
         im = cv2.resize(im, dsize=(300, 300), interpolation=cv2.INTER_CUBIC)
         # Adding data augmentation to avoid overfitting
@@ -169,7 +137,7 @@ def train_model(architecture):
         "batch_size": 1,
         "shuffle": False,
     }
-    training_set = thyroidDataset(split='train')
+    training_set = thyroidDataset(split='training')
     training_generator = torch.utils.data.DataLoader(training_set, **parameters_train)
     totiter = len(training_generator)
     if architecture == 0:
@@ -187,7 +155,7 @@ def train_model(architecture):
     model = model.to(device)
     criterion = torch.nn.BCELoss(reduction='mean')
     optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)
-    for epoch in range(600):
+    for epoch in range(200):
         running_loss = 0.0
         model.train()
         for batch_idx, data in tqdm(enumerate(training_generator), total=totiter):
@@ -222,7 +190,7 @@ def perform_test(model):
         "shuffle": False,
     }
     rescale = torch.nn.Sigmoid()
-    training_set = thyroidDataset(split='train')
+    training_set = thyroidDataset(split='training')
     training_generator = torch.utils.data.DataLoader(training_set, **parameters_test)
     test_set = thyroidDataset(split='test')
     test_generator = torch.utils.data.DataLoader(test_set, **parameters_test)
@@ -291,6 +259,7 @@ def perform_test(model):
     print('Accuracy of the network on the test images: %d %%' % (100 * correct / total))
     print('Per class acuracy is: ')
     print((class_correctness / totiter) * 100)
+
 if __name__ == "__main__":
     architecture = int(sys.argv[1])
     print(architecture)
