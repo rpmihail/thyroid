@@ -147,7 +147,7 @@ for data in training_generator: # with "_" we just ignore the labels (the second
      image_batch = image_batch.astype(np.uint8)
      image_batch = Image.fromarray(image_batch)
      image_name = data['name'][0].split('/')[-1]
-     image_batch.save(f"generated_images1/{image_name}")
+     image_batch.save(f"generated_images/{image_name}")
      save_labels = labels.cpu().numpy().tolist()
      save_data = [image_name, save_labels]
      fp.write("%s\n" % save_data)

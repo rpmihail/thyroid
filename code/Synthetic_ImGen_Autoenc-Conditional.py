@@ -203,7 +203,7 @@ class Encoder(nn.Module):
         self.flatten = nn.Flatten(start_dim=1)
 ### Linear section
         self.encoder_fc = nn.Sequential(
-            nn.Linear(2304 + 15, fc2_input_dim * 4),
+            nn.Linear(2304 + 15 + 1, fc2_input_dim * 4),
             nn.ReLU(True),
             nn.Linear(4* fc2_input_dim, 2 * fc2_input_dim)
         )
@@ -241,7 +241,7 @@ class Decoder(nn.Module):
     def __init__(self, encoded_space_dim,fc2_input_dim):
         super().__init__()
         self.decoder_lin = nn.Sequential(
-            nn.Linear(encoded_space_dim + 15, fc2_input_dim),
+            nn.Linear(encoded_space_dim + 15 + 1 , fc2_input_dim),
             nn.ReLU(True),
             nn.Linear(fc2_input_dim, 3 * 3 * fc2_input_dim),
             nn.ReLU(True)
@@ -330,10 +330,14 @@ def train_epoch(encoder, decoder, device, dataloader, loss_fn, optimizer):
         image_batch = data["image"]
         image_batch = image_batch.to(device)
         
+        types = torch.unsqueeze(data["types"], 1)
+        
         
         #print("Random data shape", np.shape(random_data), "; data[labels] ", np.shape(data["labels"]))
         latent = data["labels"]
         latent = latent.to(device)
+        
+        latent = torch.cat((latent, types.to(device)), dim=1).to(device)
         
         #print(latent)
         
@@ -373,7 +377,7 @@ def train_epoch(encoder, decoder, device, dataloader, loss_fn, optimizer):
 # In[7]:
 
 
-num_epochs = 1000
+num_epochs = 10000
 diz_loss = {'train_loss':[],'val_loss':[]}
 for epoch in range(num_epochs):
     train_loss = train_epoch(encoder,decoder,device,training_generator,loss_fn,optim)
@@ -382,6 +386,9 @@ for epoch in range(num_epochs):
 
 
 # In[22]:
+    
+torch.save(decoder.state_dict(), "decoder.dict")
+# In[23]:
 
 
 import torchvision
