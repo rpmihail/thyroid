@@ -23,7 +23,7 @@ import torch
 import cv2
 import torch.nn as nn
 import torch.nn.functional as F
-
+import os
 
 # In[4]:
 
@@ -127,14 +127,14 @@ def generate_label():
     if comp > 0:
         label[0,comp-1] = 1
     if echo > 0:
-        label[0,4+echo] = 1
+        label[0,3+echo] = 1
     if margins > 0:
-        label[0,8+margins] = 1
+        label[0,7+margins] = 1
     label[0,12+calc] = 1
     label[0, 15] = t_type
     return label
 
-# 0 1 2 3 |4 5 6 7 | 10 11 12 13 | 15 16
+# 0 1 2 3 |4 5 6 7 | 8 9 10 11 |12 13 14
 
 
 print(generate_label())
@@ -156,13 +156,43 @@ class thyroidDataset(Dataset):
         img_recon = torch.unsqueeze(torch.squeeze(decoder(decoder_input)), 0)
         
         
-        
-
-        
         sample = {"image": img_recon.detach().cpu().numpy(), "labels": labels[:, :15], "types" : labels[:, 15]}
         return sample
 
 
+
+
+class thyroidActualDataset(Dataset):
+    def __init__(self, split):
+        with open('labels_list_' + split + '_gen.txt') as f:
+            self.samples = f.read().splitlines()
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        data_list = self.samples[idx].split(', ')
+        name = data_list[0]
+        labels = data_list[1:16]
+        labels = [float(element) for element in labels]
+        labels = np.array(labels)
+        im_name = os.path.join('/home/ahana/thyroid/code/generated_images1', name + '.jpg')
+        im = cv2.imread(str(im_name))
+        im = cv2.resize(im, dsize=(252, 252), interpolation=cv2.INTER_CUBIC)
+        im = im[:,:,0]
+        # Adding data augmentation to avoid overfitting
+        #if random.randint(1, 10) > 5:
+        #    im = np.flipud(im)
+        #if random.randint(1, 10) > 5:
+        #    im = np.fliplr(im)
+        #if random.randint(1, 10) > 5:
+        #    for i in range(random.randint(1, 4)):
+        #        im = np.rot90(im)
+        #im = np.ascontiguousarray(im)
+        transforms = Compose([ToTensor()])
+        im = transforms(im)
+        sample = {"image": im, "labels": torch.from_numpy(labels)}
+        return sample
 
 # Dataset creation
 training_set = thyroidDataset()
@@ -271,7 +301,10 @@ def train_model(architecture):
     totiter = len(training_generator)
     if architecture == 0:
         print("Training VG16")
-        model = models.vgg16(pretrained=False)
+        model = models.vgg16(pretrained=False) # pretrained=False just for debug reasons
+        first_conv_layer = [nn.Conv2d(1, 3, kernel_size=3, stride=1, padding=1, dilation=1, groups=1, bias=True)]
+        first_conv_layer.extend(list(model.features))
+        model.features= nn.Sequential(*first_conv_layer )
         model.classifier._modules['6'] = torch.nn.Linear(4096, 15)
     elif architecture == 1:
         print("Training Unet encoder")
@@ -290,7 +323,6 @@ def train_model(architecture):
         for batch_idx, data in tqdm(enumerate(training_generator), total=totiter):
             model.train(True)
             x_train = data["image"]
-            # print(x_train.size())
             y_train = data["labels"]
             x_train, y_train = (
                 x_train.to(device),
@@ -301,6 +333,7 @@ def train_model(architecture):
         # forward + backward + optimize
             output = model(x_train)
             output = rescale(output)
+            output = torch.unsqueeze(output, 1)
             loss = criterion(output.float(), y_train.float())
             loss.backward()
             optimizer.step()
@@ -312,7 +345,7 @@ def train_model(architecture):
     torch.save(model.state_dict(), f'../data/models/classification_binary_{architecture}.pt')
     return model
 
-def perform_test(model):
+def perform_test(model, dataset):
     device = torch.device("cuda:0" if use_cuda else "cpu")
     parameters_test = {
         "batch_size": 1,
@@ -322,7 +355,7 @@ def perform_test(model):
     training_set = thyroidDataset()
     training_generator = torch.utils.data.DataLoader(training_set, **parameters_test)
     
-    test_set = thyroidDataset()
+    test_set = dataset
     test_generator = torch.utils.data.DataLoader(test_set, **parameters_test)
     
     totiter = len(test_generator)
@@ -348,7 +381,6 @@ def perform_test(model):
             predicted[predicted >= 0.5] = 1.0
             total += 15
             comparison = y_test == predicted
-            print(comparison[:4].all(), comparison[4:8].all(), comparison[8:12].all(), comparison[12:].all())
             errors = np.ones(15, dtype = int)
             errors[predicted == y_test] = 0
             correct = correct + 15 - np.sum(errors)
@@ -387,15 +419,16 @@ def perform_test(model):
             for i in range(15):
                 class_correctness[i] = class_correctness[i] + 1 - errors[i]
 
-    print('Accuracy of the network on the test images: %d %%' % (100 * correct / total))
+    print('Accuracy of the network on the train images: %d %%' % (100 * correct / total))
     print('Per class acuracy is: ')
     print((class_correctness / totiter) * 100)
 
 
-architecture = 3
+architecture = 0
 print(architecture)
 model = train_model(architecture)
-perform_test(model)
+perform_test(model, thyroidDataset())
+perform_test(model, thyroidActualDataset('test'))
 
 
 
