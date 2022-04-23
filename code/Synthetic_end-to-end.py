@@ -27,7 +27,8 @@ import os
 
 # In[4]:
 
-    
+n_attributes = 15
+n_groups = 192
     
 class Decoder(nn.Module):
     
@@ -86,7 +87,19 @@ device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cp
 decoder.to(device)
 
 
+def projection_simplex_sort(v, z=1):
 
+    n_features = v.size(1)
+    u,_ = torch.sort(v, descending=True)
+    cssv = torch.cumsum(u,1) - z
+    ind = torch.arange(n_features).type_as(v) + 1
+    cond = u - cssv / ind > 0
+    #rho = ind[cond][-1]
+    rho,ind_rho = (ind*cond).max(1)
+    #theta = cssv[cond][-1] / float(rho)
+    theta = torch.gather(cssv,1,ind_rho[:,None]) / rho[:,None]
+    w = torch.clamp(v - theta, min=0)
+    return w
 
 
 # In[2]:
@@ -156,7 +169,7 @@ class thyroidDataset(Dataset):
         img_recon = torch.unsqueeze(torch.squeeze(decoder(decoder_input)), 0)
         
         
-        sample = {"image": img_recon.detach().cpu().numpy(), "labels": labels[:, :15], "types" : labels[:, 15]}
+        sample = {"image": img_recon.detach().cpu().numpy(), "labels": labels[:, :15], "type" : labels[:, 15]}
         return sample
 
 
@@ -173,7 +186,7 @@ class thyroidActualDataset(Dataset):
     def __getitem__(self, idx):
         data_list = self.samples[idx].split(', ')
         name = data_list[0]
-        labels = data_list[1:16]
+        labels = data_list[1:]
         labels = [float(element) for element in labels]
         labels = np.array(labels)
         im_name = os.path.join('/home/ahana/thyroid/code/generated_images1', name + '.jpg')
@@ -191,7 +204,8 @@ class thyroidActualDataset(Dataset):
         #im = np.ascontiguousarray(im)
         transforms = Compose([ToTensor()])
         im = transforms(im)
-        sample = {"image": im, "labels": torch.from_numpy(labels)}
+        labels =  torch.from_numpy(labels)
+        sample = {"image": im, "labels": labels[:15], "type": labels[15]}
         return sample
 
 # Dataset creation
@@ -221,20 +235,21 @@ class net(torch.nn.Module):
     def __init__(self):
         super().__init__()
         
-        self.conv1 = nn.Conv2d(1, 16, 3)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(16, 32, 3)
-        self.conv3 = nn.Conv2d(32, 64, 3)
-        self.conv4 = nn.Conv2d(64, 128, 3)
-        self.conv5 = nn.Conv2d(128, 256,3)
-        #self.GAP = nn.AdaptiveAvgPool2d((1,1))
-        
-        #self.features = [self.conv1, self.conv2, self.conv3, self.conv4]
-        
-        self.fc1 = nn.Linear(12544, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 15)
-        
+        self.model = models.vgg16(pretrained=False) # pretrained=False just for debug reasons
+        model_layers = [nn.Conv2d(1, 3, kernel_size=3, stride=1, padding=1, dilation=1, groups=1, bias=True)]
+        model_layers.extend(list(self.model.features))
+        self.model.features= nn.Sequential(*model_layers)
+        self.model.classifier._modules['6'] = torch.nn.Linear(4096, 15)
+        self.rescale = torch.nn.Sigmoid()
+        self.fc1 = nn.Linear(n_attributes, n_groups, bias = False)
+        self.fc2 = nn.Linear(n_groups, 1, bias = False)
+        self.fc1.weight.data = self.fc1.weight.data.relu() / (
+            self.fc1.weight.data.relu().sum(1, keepdim=True))
+        self.fc2.weight.data.fill_(0)
+
+        #type_classifier_layers = [nn.Linear(n_attributes, n_groups, bias = False),
+        #        nn.Linear(n_groups, 1, bias = False)]
+        #type_classifier = nn.Sequential(*type_classifier_layers) 
         #self.G_ = torch.nn.Parameter(G)
         #self.W_ = torch.nn.Parameter(W)
         #self.CNN_ = torch.nn.Parameter(CNN)
@@ -243,20 +258,9 @@ class net(torch.nn.Module):
 
     def forward(self, x):
             
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = self.pool(F.relu(self.conv3(x)))
-        x = self.pool(F.relu(self.conv4(x)))
-        # Adding 1 more conv, a GAP and a final linear layer for CAM
-        x = self.pool(F.relu(self.conv5(x)))
-        #features = x
-        #x = self.GAP(x)
-        
-        x = torch.flatten(x, 1) # flatten all dimensions except batch
-        #print(x.size())
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        y = self.fc3(x)
+        attributes = self.rescale(self.model(x))
+        y = self.fc1(attributes)
+        y = self.fc2(y)
         
         #x = torch.unsqueeze(x, 2)
         #print(x.size())
@@ -274,7 +278,7 @@ class net(torch.nn.Module):
         #y = torch.sum(y, axis=0)
         
         #return (torch.sigmoid(y), x, features)
-        return torch.sigmoid(y)
+        return attributes, torch.sigmoid(y)
 
 ################################################################################################################################
 
@@ -286,7 +290,7 @@ from unet_models import UNet_encoder
 
 use_cuda = torch.cuda.is_available()    
 
-def train_model(architecture):
+def train_model():
     device = torch.device("cuda:0" if use_cuda else "cpu")
     parameters_train = {
         "batch_size": 8,
@@ -299,50 +303,47 @@ def train_model(architecture):
     training_set = thyroidDataset()
     training_generator = torch.utils.data.DataLoader(training_set, **parameters_train)
     totiter = len(training_generator)
-    if architecture == 0:
-        print("Training VG16")
-        model = models.vgg16(pretrained=False) # pretrained=False just for debug reasons
-        first_conv_layer = [nn.Conv2d(1, 3, kernel_size=3, stride=1, padding=1, dilation=1, groups=1, bias=True)]
-        first_conv_layer.extend(list(model.features))
-        model.features= nn.Sequential(*first_conv_layer )
-        model.classifier._modules['6'] = torch.nn.Linear(4096, 15)
-    elif architecture == 1:
-        print("Training Unet encoder")
-        model = UNet_encoder(1, 3)
-    else:
-        print("Training custom model")
-        model = net()
+    print("Training custom model")
+    model = net()
 
-    rescale = torch.nn.Sigmoid()
     model = model.to(device)
     criterion = torch.nn.BCELoss(reduction='mean')
     optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)
-    for epoch in range(600):
+    for epoch in range(200):
         running_loss = 0.0
+        loss1_sum = 0.0
+        loss2_sum = 0.0
         model.train()
         for batch_idx, data in tqdm(enumerate(training_generator), total=totiter):
             model.train(True)
             x_train = data["image"]
             y_train = data["labels"]
-            x_train, y_train = (
+            y_type = data["type"]
+            x_train, y_train, y_type = (
                 x_train.to(device),
                 y_train.to(device),
+                y_type.to(device)
             )
             optimizer.zero_grad()
 
         # forward + backward + optimize
-            output = model(x_train)
-            output = rescale(output)
-            output = torch.unsqueeze(output, 1)
-            loss = criterion(output.float(), y_train.float())
+            attributes, target = model(x_train)
+            attributes_pred = torch.unsqueeze(attributes, 1)
+            loss1 = criterion(attributes_pred.float(), y_train.float())
+            loss2 = criterion(target.float(), y_type.float())
+            loss = loss1 + loss2 
             loss.backward()
             optimizer.step()
+            model.fc1.weight.data = projection_simplex_sort(model.fc1.weight.data)
             running_loss += loss.item()
+            loss1_sum += loss1.item()
+            loss2_sum += loss2.item()
         print('[%d] loss: %.3f' %
                   (epoch + 1, running_loss / totiter))
+        print(loss1_sum, loss2_sum, running_loss)
         
     print("Training complete")
-    torch.save(model.state_dict(), f'../data/models/classification_binary_{architecture}.pt')
+    torch.save(model.state_dict(), f'../data/models/end_to_end.pt')
     return model
 
 def perform_test(model, dataset):
@@ -351,9 +352,6 @@ def perform_test(model, dataset):
         "batch_size": 1,
         "shuffle": False,
     }
-    rescale = torch.nn.Sigmoid()
-    training_set = thyroidDataset()
-    training_generator = torch.utils.data.DataLoader(training_set, **parameters_test)
     
     test_set = dataset
     test_generator = torch.utils.data.DataLoader(test_set, **parameters_test)
@@ -361,75 +359,56 @@ def perform_test(model, dataset):
     totiter = len(test_generator)
     total = 0
     correct = 0
+    type_total = 0
+    type_correct = 0
     class_correctness = np.zeros(15, dtype=int)
     with torch.no_grad():
         for batch_idx, data in tqdm(enumerate(test_generator), total=totiter):
             x_test = data["image"]
             y_test = data["labels"]
-            x_test, y_test = (
+            y_type = data["type"]
+            x_test, y_test, y_type = (
                 x_test.to(device),
                 y_test.to(device),
+                y_type.to(device)
             )
-            output = model(x_test)
-            output = rescale(output)
+            output, pred_type = model(x_test)
             predicted = output.data
             predicted = predicted.detach().cpu().numpy()
             predicted = predicted.flatten()
+            pred_type = pred_type.detach().cpu().numpy()
+            pred_type = pred_type.flatten()
+            y_type = y_type.detach().cpu().numpy()
+            y_type = y_type.flatten()
             y_test = y_test.detach().cpu().numpy()
             y_test = y_test.flatten()
             predicted[predicted < 0.5] = 0.0
             predicted[predicted >= 0.5] = 1.0
+            pred_type[pred_type < 0.5] = 0.0
+            pred_type[pred_type >= 0.5] = 1.0
             total += 15
-            comparison = y_test == predicted
+            type_total += 1
+            pred_type = pred_type.astype(int)
+            y_type = y_type.astype(int)
+            y_test = y_test.astype(int)
+            predicted = predicted.astype(int)
             errors = np.ones(15, dtype = int)
             errors[predicted == y_test] = 0
             correct = correct + 15 - np.sum(errors)
+            if y_type[0] == pred_type[0]:
+                type_correct += 1
             for i in range(15):
                 class_correctness[i] = class_correctness[i] + 1 - errors[i]
             
     print('Accuracy of the network on the test images: %d %%' % (100 * correct / total))
     print('Per class acuracy is: ')
     print((class_correctness / totiter) * 100)
+    print('Type accuracy: %d %%' %(100 * type_correct / type_total))
 
-    totiter = len(training_generator)
-    total = 0
-    correct = 0
-    class_correctness = np.zeros(15, dtype=int)
-    with torch.no_grad():
-        for batch_idx, data in tqdm(enumerate(training_generator), total=totiter):
-            x_test = data["image"]
-            y_test = data["labels"]
-            x_test, y_test = (
-                x_test.to(device),
-                y_test.to(device),
-            )
-            output = model(x_test)
-            output = rescale(output)
-            predicted = output.data
-            predicted = predicted.detach().cpu().numpy()
-            predicted = predicted.flatten()
-            y_test = y_test.detach().cpu().numpy()
-            y_test = y_test.flatten()
-            predicted[predicted < 0.5] = 0.0
-            predicted[predicted >= 0.5] = 1.0
-            total += 15
-            errors = np.ones(15, dtype = int)
-            errors[predicted == y_test] = 0
-            correct = correct + 15 - np.sum(errors)
-            for i in range(15):
-                class_correctness[i] = class_correctness[i] + 1 - errors[i]
-
-    print('Accuracy of the network on the train images: %d %%' % (100 * correct / total))
-    print('Per class acuracy is: ')
-    print((class_correctness / totiter) * 100)
-
-
-architecture = 0
-print(architecture)
-model = train_model(architecture)
+model = train_model()
 perform_test(model, thyroidDataset())
 perform_test(model, thyroidActualDataset('test'))
-
+perform_test(model, thyroidActualDataset('training'))
 
 
 
