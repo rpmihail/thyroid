@@ -74,24 +74,29 @@ class thyroidDataset(Dataset):
                 margin = x.text
             if x.tag=='calcifications' and x.text is not None:
                 calcification = x.text
-        features = np.zeros(4, dtype=np.float32)
-        features[0] = self.compositions[composition]
-        features[1] = self.echogenicities[echogenicity]
-        features[2] = self.margins[margin]
-        features[3] = self.calcifications[calcification]
+        features = np.zeros(15, dtype=np.float32)
+        if self.compositions[composition] > 0:
+            features[self.compositions[composition]-1] = 1.0
+        if self.echogenicities[echogenicity] > 0:
+            features[self.echogenicities[echogenicity]+3] = 1.0
+        if self.margins[margin] > 0:
+            features[self.margins[margin]+7] = 1.0
+        features[self.calcifications[calcification]+12]
         features = torch.from_numpy(features)
         sample = {"features": features,
                   "label": self.types[self.labels[idx]]}
         return sample
 
 class LogisticRegression(torch.nn.Module):
-    def __init__(self, input_dim, output_dim):
+    def __init__(self, input_dim, internal_dim, output_dim):
         super(LogisticRegression, self).__init__()
-        self.linear = torch.nn.Linear(input_dim, output_dim)
+        self.linear = torch.nn.Linear(input_dim, internal_dim)
+        self.linear1 =  torch.nn.Linear(internal_dim, output_dim)
         self.rescale = torch.nn.Sigmoid()
 
     def forward(self, x):
         output = self.linear(x)
+        output = self.linear1(output)
         output = self.rescale(output)
         return output
     
@@ -108,13 +113,14 @@ def train_model():
     training_set = thyroidDataset(split='train')
     training_generator = torch.utils.data.DataLoader(training_set, **parameters_train)
     totiter = len(training_generator)
-    input_dim = 4
+    input_dim = 15
     output_dim = 1
-    model = LogisticRegression(input_dim, output_dim)
+    internal_dim = 5
+    model = LogisticRegression(input_dim, internal_dim, output_dim)
     model = model.to(device)
     criterion = torch.nn.BCELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
-    for epoch in range(5000):
+    for epoch in range(600):
         running_loss = 0.0
         model.train()
         for batch_idx, data in tqdm(enumerate(training_generator), total=totiter):

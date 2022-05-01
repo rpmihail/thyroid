@@ -28,7 +28,7 @@ import os
 # In[4]:
 
 n_attributes = 15
-n_groups = 192
+n_groups = 5
     
 class Decoder(nn.Module):
     
@@ -179,6 +179,8 @@ class thyroidActualDataset(Dataset):
     def __init__(self, split):
         with open('labels_list_' + split + '_gen.txt') as f:
             self.samples = f.read().splitlines()
+        if len(self.samples) > 73:
+            self.samples = self.samples[:73]
 
     def __len__(self):
         return len(self.samples)
@@ -205,7 +207,8 @@ class thyroidActualDataset(Dataset):
         transforms = Compose([ToTensor()])
         im = transforms(im)
         labels =  torch.from_numpy(labels)
-        sample = {"image": im, "labels": labels[:15], "type": labels[15]}
+        labels = torch.unsqueeze(labels, 0)
+        sample = {"image": im, "labels": labels[:,:15], "type": labels[:,15]}
         return sample
 
 # Dataset creation
@@ -259,6 +262,7 @@ class net(torch.nn.Module):
     def forward(self, x):
             
         attributes = self.rescale(self.model(x))
+        #data = torch.cat((attributes, torch.squeeze(y, 1)), 1).float()
         y = self.fc1(attributes)
         y = self.fc2(y)
         
@@ -300,6 +304,7 @@ def train_model():
         "batch_size": 1,
         "shuffle": False,
     }
+    #training_set = thyroidActualDataset('training')
     training_set = thyroidDataset()
     training_generator = torch.utils.data.DataLoader(training_set, **parameters_train)
     totiter = len(training_generator)
@@ -309,7 +314,7 @@ def train_model():
     model = model.to(device)
     criterion = torch.nn.BCELoss(reduction='mean')
     optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)
-    for epoch in range(200):
+    for epoch in range(600):
         running_loss = 0.0
         loss1_sum = 0.0
         loss2_sum = 0.0
@@ -344,6 +349,77 @@ def train_model():
         
     print("Training complete")
     torch.save(model.state_dict(), f'../data/models/end_to_end.pt')
+    G = model.fc1.weight.data
+    G = G.cpu().numpy()
+    W = model.fc2.weight.data
+    a = n_attributes
+    z = n_groups
+    source = [i % a for i in range(z*a)]
+    target = [(i // a) + a for i in range(z*a)]
+   
+    G[G < 0.05] = 0.0
+    value = G.flatten().tolist()
+    print(len(source), len(target), len(value))
+
+    color_node = [
+              '#808080', '#808080', '#808080', '#808080', '#808080',
+              '#808080', '#808080', '#808080', '#808080', '#808080',
+              '#808080', '#808080', '#808080', '#808080', '#808080',
+              #'#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#FF00FF',
+              #'#00CED1', '#FF8C00', '#BDB76B', '#2F4F4F', '#B8860B'
+              ]
+
+    color_link = []
+    link_colors = ['#F08080', '#FFFACD', '#98FB98', '#87CEFA', '#FF0000']
+    for i in range(z):
+        color_link.extend([link_colors[i]] * a)
+    print(color_link)
+    fig = go.Figure(data=[go.Sankey(
+        node = dict(
+          pad = 15,
+          thickness = 20,
+          color = color_node,
+          label = ["cystic", "mostly solid", "solid", "spongiform",
+               "hyper", "hypo", "iso", "marked",
+               "ill-defined", "micro_m", "spiculated", "smooth",
+               "macro", "micro", "non",
+               "G1", "G2", "G3", "G4", "G5"],
+        ),
+        link = dict(
+          source = source,
+          target = target,
+          value = value,
+          color = color_link
+      ))])
+    fig.update_layout(title_text="Basic Sankey Diagram", font_size=10)
+    fig.show()
+    source = [i % z for i in range(z*1)]
+    target = [(i // z) + z for i in range(z*1)] 
+    W = W.cpu().numpy()
+
+    value = W.flatten().tolist()
+    print(len(source), len(target), len(value))
+
+    color_node = ['#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#FF00FF']
+
+    color_link = []
+    link_colors = ['#F08080', '#FFFACD', '#98FB98', '#87CEFA', '#00CED1']
+
+    fig = go.Figure(data=[go.Sankey(
+        node = dict(
+          pad = 15,
+          thickness = 20,
+          color = color_node,
+          label = ["G1", "G2", "G3", "G4", "G5", "label"],
+        ),
+        link = dict(
+          source = source,
+          target = target,
+          value = value,
+          color = link_colors
+      ))])
+    fig.update_layout(title_text="Basic Sankey Diagram", font_size=10)
+    fig.show()
     return model
 
 def perform_test(model, dataset):
