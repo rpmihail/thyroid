@@ -14,6 +14,7 @@ import random
 from tqdm import tqdm
 import xml.etree.ElementTree as ET
 import cv2
+import plotly
 import plotly.graph_objs as go
 from torchvision.transforms import Compose
 from torchvision.transforms import ToTensor
@@ -177,10 +178,10 @@ class thyroidDataset(Dataset):
 
 class thyroidActualDataset(Dataset):
     def __init__(self, split):
-        with open('labels_list_' + split + '_gen.txt') as f:
+        with open('labels_list_' + split + '_gen1.txt') as f:
             self.samples = f.read().splitlines()
-        if len(self.samples) > 73:
-            self.samples = self.samples[:73]
+        #if len(self.samples) > 73:
+        #    self.samples = self.samples[:74]
 
     def __len__(self):
         return len(self.samples)
@@ -304,8 +305,8 @@ def train_model():
         "batch_size": 1,
         "shuffle": False,
     }
-    #training_set = thyroidActualDataset('training')
-    training_set = thyroidDataset()
+    training_set = thyroidActualDataset('training')
+    #training_set = thyroidDataset()
     training_generator = torch.utils.data.DataLoader(training_set, **parameters_train)
     totiter = len(training_generator)
     print("Training custom model")
@@ -314,7 +315,7 @@ def train_model():
     model = model.to(device)
     criterion = torch.nn.BCELoss(reduction='mean')
     optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)
-    for epoch in range(600):
+    for epoch in range(20):
         running_loss = 0.0
         loss1_sum = 0.0
         loss2_sum = 0.0
@@ -356,7 +357,7 @@ def train_model():
     z = n_groups
     source = [i % a for i in range(z*a)]
     target = [(i // a) + a for i in range(z*a)]
-   
+
     G[G < 0.05] = 0.0
     value = G.flatten().tolist()
     print(len(source), len(target), len(value))
@@ -370,20 +371,31 @@ def train_model():
               ]
 
     color_link = []
-    link_colors = ['#F08080', '#FFFACD', '#98FB98', '#87CEFA', '#FF0000']
+    link_colors = ['#F08080', '#FFFACD', '#98FB98', '#87CEFA', '#FF0000', '#00CED1', '#FF8C00', '#BDB76B', '#2F4F4F', '#B8860B']
+    link_colors = link_colors * ((n_groups // len(link_colors)) + 1)
     for i in range(z):
         color_link.extend([link_colors[i]] * a)
     print(color_link)
+    group_label = []
+    for i in range(1, n_groups + 1):
+        group_label.append("G" + str(i))
+    label = ["cystic_c", "mostly solid_c", "solid_c", "spongiform_c",
+            "hyper_e", "hypo_e", "iso_e", "marked_e",
+            "ill-defined_m", "micro_m", "spiculated_m", "smooth_m",
+            "macro_ca", "micro_ca", "non_ca"]
+    label.extend(group_label)
+
     fig = go.Figure(data=[go.Sankey(
         node = dict(
           pad = 15,
           thickness = 20,
           color = color_node,
-          label = ["cystic", "mostly solid", "solid", "spongiform",
-               "hyper", "hypo", "iso", "marked",
-               "ill-defined", "micro_m", "spiculated", "smooth",
-               "macro", "micro", "non",
-               "G1", "G2", "G3", "G4", "G5"],
+          #label = ["cystic_c", "mostly solid_c", "solid_c", "spongiform_c",
+          #     "hyper_e", "hypo_e", "iso_e", "marked_e",
+          #     "ill-defined_m", "micro_m", "spiculated_m", "smooth_m",
+          #     "macro_ca", "micro_ca", "non_ca",
+          #     "G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8", "G9", "G10"],
+          label = label
         ),
         link = dict(
           source = source,
@@ -393,24 +405,45 @@ def train_model():
       ))])
     fig.update_layout(title_text="Basic Sankey Diagram", font_size=10)
     fig.show()
+    plotly.offline.plot(fig, filename='plot1_5.html')
+    #fig.write_image('plot1.png')
+    #fig.show()
+    #plt.savefig("plot1.png")
+    #fig.show()
     source = [i % z for i in range(z*1)]
     target = [(i // z) + z for i in range(z*1)] 
     W = W.cpu().numpy()
+    print(W)
+    # W = W - np.amin(W)
+    print(W)
+    value = W.flatten()
+    # value = W.flatten().tolist()
 
-    value = W.flatten().tolist()
-    print(len(source), len(target), len(value))
-
-    color_node = ['#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#FF00FF']
-
+    color_node = ['#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#FF00FF', '#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#FF00FF']
+    color_node = color_node * ((n_groups // len(color_node))+ 1)
     color_link = []
-    link_colors = ['#F08080', '#FFFACD', '#98FB98', '#87CEFA', '#00CED1']
+    link_pos_colors = ['#149697', '#00AAC0', '#8080CC', '#333388', '#77CCCC', '#149697', '#00AAC0', '#8080CC', '#333388', '#77CCCC']
+    link_neg_colors = ['#E65662', '#FF8066', '#894E3F', '#E79598', '#FDA45C', '#E65662', '#FF8066', '#894E3F', '#E79598', '#FDA45C']
+    
+    link_colors = []
+    label = []
+    for i in range(len(source)):
+        if value[i] < 0:
+            link_colors.append(link_neg_colors[i%10])
+        else:
+            link_colors.append(link_pos_colors[i%10])
+        label.append(str(value[i]) + "| G" + str(i+1))
 
+    # ['#F08080', '#FFFACD', '#98FB98', '#87CEFA', '#00CED1']
+    label.append("benign/ malignant")
+    value = np.abs(value).tolist()
     fig = go.Figure(data=[go.Sankey(
         node = dict(
           pad = 15,
           thickness = 20,
           color = color_node,
-          label = ["G1", "G2", "G3", "G4", "G5", "label"],
+          label = label,
+          # label = ["G1", "G2", "G3", "G4", "G5", "benign / malignant"],
         ),
         link = dict(
           source = source,
@@ -420,6 +453,9 @@ def train_model():
       ))])
     fig.update_layout(title_text="Basic Sankey Diagram", font_size=10)
     fig.show()
+    plotly.offline.plot(fig, filename='plot2_5.html')
+    #plt.savefig('plot2.png')
+    #fig.write_image('plot2.png')
     return model
 
 def perform_test(model, dataset):
@@ -458,12 +494,14 @@ def perform_test(model, dataset):
             y_type = y_type.flatten()
             y_test = y_test.detach().cpu().numpy()
             y_test = y_test.flatten()
+            #print(predicted, pred_type, y_test, y_type)
             predicted[predicted < 0.5] = 0.0
             predicted[predicted >= 0.5] = 1.0
             pred_type[pred_type < 0.5] = 0.0
             pred_type[pred_type >= 0.5] = 1.0
             total += 15
             type_total += 1
+            print(predicted, pred_type, y_type, y_test)
             pred_type = pred_type.astype(int)
             y_type = y_type.astype(int)
             y_test = y_test.astype(int)
@@ -482,9 +520,9 @@ def perform_test(model, dataset):
     print('Type accuracy: %d %%' %(100 * type_correct / type_total))
 
 model = train_model()
-perform_test(model, thyroidDataset())
+# perform_test(model, thyroidDataset())
 perform_test(model, thyroidActualDataset('test'))
-perform_test(model, thyroidActualDataset('training'))
+#perform_test(model, thyroidActualDataset('training'))
 
 
 
