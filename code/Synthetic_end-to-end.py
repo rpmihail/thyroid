@@ -25,11 +25,13 @@ import cv2
 import torch.nn as nn
 import torch.nn.functional as F
 import os
+import sys
 
 # In[4]:
 
 n_attributes = 15
-n_groups = 5
+n_groups = int(sys.argv[1])
+
     
 class Decoder(nn.Module):
     
@@ -151,7 +153,6 @@ def generate_label():
 # 0 1 2 3 |4 5 6 7 | 8 9 10 11 |12 13 14
 
 
-print(generate_label())
     
 
 
@@ -209,7 +210,7 @@ class thyroidActualDataset(Dataset):
         im = transforms(im)
         labels =  torch.from_numpy(labels)
         labels = torch.unsqueeze(labels, 0)
-        sample = {"image": im, "labels": labels[:,:15], "type": labels[:,15]}
+        sample = {"image": im, "labels": labels[:,:15], "type": labels[:,15], "filename": name}
         return sample
 
 # Dataset creation
@@ -243,7 +244,9 @@ class net(torch.nn.Module):
         model_layers = [nn.Conv2d(1, 3, kernel_size=3, stride=1, padding=1, dilation=1, groups=1, bias=True)]
         model_layers.extend(list(self.model.features))
         self.model.features= nn.Sequential(*model_layers)
-        self.model.classifier._modules['6'] = torch.nn.Linear(4096, 15)
+        #self.model.classifier._modules['6'] = torch.nn.Linear(4096, 15)
+        self.model.avgpool = torch.nn.AdaptiveAvgPool2d((1, 1))
+        self.model.classifier = torch.nn.Sequential(torch.nn.Linear(512, 15))
         self.rescale = torch.nn.Sigmoid()
         self.fc1 = nn.Linear(n_attributes, n_groups, bias = False)
         self.fc2 = nn.Linear(n_groups, 1, bias = False)
@@ -295,6 +298,12 @@ from unet_models import UNet_encoder
 
 use_cuda = torch.cuda.is_available()    
 
+
+def get_features(name):
+    def hook(model, input, output):
+        features[name] = output.detach()
+    return hook
+
 def train_model():
     device = torch.device("cuda:0" if use_cuda else "cpu")
     parameters_train = {
@@ -309,13 +318,14 @@ def train_model():
     #training_set = thyroidDataset()
     training_generator = torch.utils.data.DataLoader(training_set, **parameters_train)
     totiter = len(training_generator)
-    print("Training custom model")
+    print("Training")
     model = net()
 
     model = model.to(device)
+    print(model)
     criterion = torch.nn.BCELoss(reduction='mean')
     optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)
-    for epoch in range(20):
+    for epoch in range(200):
         running_loss = 0.0
         loss1_sum = 0.0
         loss2_sum = 0.0
@@ -360,7 +370,6 @@ def train_model():
 
     G[G < 0.05] = 0.0
     value = G.flatten().tolist()
-    print(len(source), len(target), len(value))
 
     color_node = [
               '#808080', '#808080', '#808080', '#808080', '#808080',
@@ -375,7 +384,6 @@ def train_model():
     link_colors = link_colors * ((n_groups // len(link_colors)) + 1)
     for i in range(z):
         color_link.extend([link_colors[i]] * a)
-    print(color_link)
     group_label = []
     for i in range(1, n_groups + 1):
         group_label.append("G" + str(i))
@@ -405,7 +413,7 @@ def train_model():
       ))])
     fig.update_layout(title_text="Basic Sankey Diagram", font_size=10)
     fig.show()
-    plotly.offline.plot(fig, filename='plot1_5.html')
+    plotly.offline.plot(fig, filename='plot1_75_CAM.html')
     #fig.write_image('plot1.png')
     #fig.show()
     #plt.savefig("plot1.png")
@@ -413,9 +421,7 @@ def train_model():
     source = [i % z for i in range(z*1)]
     target = [(i // z) + z for i in range(z*1)] 
     W = W.cpu().numpy()
-    print(W)
     # W = W - np.amin(W)
-    print(W)
     value = W.flatten()
     # value = W.flatten().tolist()
 
@@ -453,10 +459,28 @@ def train_model():
       ))])
     fig.update_layout(title_text="Basic Sankey Diagram", font_size=10)
     fig.show()
-    plotly.offline.plot(fig, filename='plot2_5.html')
+    plotly.offline.plot(fig, filename='plot2_75_CAM.html')
     #plt.savefig('plot2.png')
     #fig.write_image('plot2.png')
     return model
+
+def returnCAM(feature_conv, weight_linear, class_idx):
+    # generate the class activation maps upsample to 256x256
+    size_upsample = (256, 256)
+    bz, nc, h, w = feature_conv.shape
+    output_cam = []
+    for idx in class_idx:
+        cam = weight_linear[idx].dot(feature_conv.reshape((nc, h*w)))
+        cam = cam.reshape(h, w)
+        cam = cam - np.min(cam)
+        if (np.max(cam)) != 0:
+            cam_img = cam / (np.max(cam))
+        else:
+            cam_img = cam
+        cam_img = np.uint8(255 * cam_img)
+        output_cam.append(cv2.resize(cam_img, size_upsample))
+
+    return output_cam
 
 def perform_test(model, dataset):
     device = torch.device("cuda:0" if use_cuda else "cpu")
@@ -474,17 +498,41 @@ def perform_test(model, dataset):
     type_total = 0
     type_correct = 0
     class_correctness = np.zeros(15, dtype=int)
+    FEATS = []
+    features = {}
+    def get_features(name):
+        def hook(model, input, output):
+            features[name] = output.detach()
+        return hook
+    model.model.features.register_forward_hook(get_features('feats'))
+    weight_linear = np.squeeze(model.model.classifier[0].weight.detach().cpu().numpy())
     with torch.no_grad():
         for batch_idx, data in tqdm(enumerate(test_generator), total=totiter):
             x_test = data["image"]
             y_test = data["labels"]
             y_type = data["type"]
+            file_name = data["filename"][0]
             x_test, y_test, y_type = (
                 x_test.to(device),
                 y_test.to(device),
                 y_type.to(device)
             )
             output, pred_type = model(x_test)
+            FEATS.append(features['feats'].cpu().numpy())
+            attrib_list = [i for i in range(0, n_attributes)]
+            # saving the CAM image with heatmaps
+            CAMs = returnCAM(FEATS[-1], weight_linear, attrib_list)
+            img = np.zeros((252, 252, 3))
+            gray_img = data["image"].cpu().numpy()
+            img[:, :, 0] = gray_img
+            img[:, :, 1] = gray_img
+            img[:, :, 2] = gray_img
+            img = img * 255
+            height, width, c = img.shape
+            for i in range(0, n_attributes):
+                heatmap = cv2.applyColorMap(cv2.resize(CAMs[i],(width, height)), cv2.COLORMAP_JET)
+                result = heatmap * 0.2 + img
+                cv2.imwrite(f'heatmaps/{file_name}_{i}.png', result)
             predicted = output.data
             predicted = predicted.detach().cpu().numpy()
             predicted = predicted.flatten()
@@ -501,7 +549,6 @@ def perform_test(model, dataset):
             pred_type[pred_type >= 0.5] = 1.0
             total += 15
             type_total += 1
-            print(predicted, pred_type, y_type, y_test)
             pred_type = pred_type.astype(int)
             y_type = y_type.astype(int)
             y_test = y_test.astype(int)
@@ -515,9 +562,15 @@ def perform_test(model, dataset):
                 class_correctness[i] = class_correctness[i] + 1 - errors[i]
             
     print('Accuracy of the network on the test images: %d %%' % (100 * correct / total))
+    accuracy = 100 * correct / total
     print('Per class acuracy is: ')
     print((class_correctness / totiter) * 100)
     print('Type accuracy: %d %%' %(100 * type_correct / type_total))
+    type_acc = 100 * type_correct / type_total
+    FEATS = np.concatenate(FEATS)
+    print('- feats shape:', FEATS.shape)
+    with open("results.txt", "a") as file1:
+        file1.write(str(n_groups) + '   ' + str(type_acc) + '  ' + str(accuracy) + '\n')
 
 model = train_model()
 # perform_test(model, thyroidDataset())
