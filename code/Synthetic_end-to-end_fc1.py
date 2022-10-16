@@ -30,9 +30,7 @@ import sys
 # In[4]:
 
 n_attributes = 15
-n_groups = 4
 expt_num = sys.argv[1]
-
     
 class Decoder(nn.Module):
     
@@ -180,6 +178,7 @@ class thyroidDataset(Dataset):
 
 class thyroidActualDataset(Dataset):
     def __init__(self, split):
+        self.split = split
         with open('labels_list_' + split + '_gen1.txt') as f:
             self.samples = f.read().splitlines()
         if len(self.samples) > 73:
@@ -196,7 +195,7 @@ class thyroidActualDataset(Dataset):
         labels = np.array(labels)
         im_name = os.path.join('/home/ahana/thyroid/code/generated_images1', name + '.jpg')
         im_masked = cv2.imread(str(im_name))
-        im_masked = cv2.resize(im_masked, dsize=(252, 252), interpolation=cv2.INTER_CUBIC)
+        #im_masked = cv2.resize(im_masked, dsize=(252, 252), interpolation=cv2.INTER_CUBIC)
         im_masked = im_masked[:,:,0]
         if int(name) < 100:
             im_name = os.path.join('/home/ahana/thyroid/data/orig', name + '.jpg')
@@ -213,26 +212,41 @@ class thyroidActualDataset(Dataset):
         
         im[:, :, 1] = im_masked
         cv2.imwrite(f'heatmaps/{name}_1.png', im)
+        
         im = im[:,:,:2]
-
-        #im_name = os.path.join('/home/ahana/thyroid/data/orig', name + '.jpg')
-        #im = cv2.imread(str(im_name))
-        #im = cv2.resize(im, dsize=(252, 252), interpolation=cv2.INTER_CUBIC)
-        #im = im[:,:,0]
         # Adding data augmentation to avoid overfitting
-        #if random.randint(1, 10) > 5:
-        #    im = np.flipud(im)
-        #if random.randint(1, 10) > 5:
-        #    im = np.fliplr(im)
-        #if random.randint(1, 10) > 5:
-        #    for i in range(random.randint(1, 4)):
-        #        im = np.rot90(im)
-        #im = np.ascontiguousarray(im)
+        aug = True
+        if self.split != "test" and aug == True:
+            if random.randint(1, 10) > 5:
+                if random.randint(1, 10) > 5:
+                    im = np.flipud(im)
+                else: #elif random.randint(1, 10) > 5:
+                    im = np.fliplr(im)
+                #elif random.randint(1, 10) > 5:
+                #    for i in range(random.randint(1, 4)):
+                #        im = np.rot90(im)
+                #else:
+                #    axis = random.randint(0, 1)
+                #    direction = random.randint(0, 1)
+                #    if direction == 0:
+                #        direction = -1
+                #    shift = random.randint(100, im.shape[0] // 2) * direction
+                    #print(f'Random shift: {shift} {axis} {name}')
+                #    im = np.roll(im, shift, axis=axis)
+                    #cv2.imwrite(f'heatmaps/{name}.png', im)
+            im = np.ascontiguousarray(im)
         transforms = Compose([ToTensor()])
         im = transforms(im)
         im_masked = transforms(im_masked)
         labels =  torch.from_numpy(labels)
         labels = torch.unsqueeze(labels, 0)
+        #for i in range(0,15):
+        #    if labels[0][i] == 1:
+        #        print((i % 4) + 1, end=',')
+        #print()
+        #cv2.imwrite(f'heatmaps/{name}.png', im.numpy()[0,:,:])
+        im = im.float()
+        #cv2.imwrite(f'heatmaps/{name}.png', im.numpy()[0,:,:])
         sample = {"image": im.float(), "im_masked": im_masked, "labels": labels[:,:15], "type": labels[:,15], "filename": name}
         return sample
 
@@ -263,20 +277,37 @@ class net(torch.nn.Module):
     def __init__(self):
         super().__init__()
         
-        self.model = models.vgg16(pretrained=False) # pretrained=False just for debug reasons
+        ###self.resnet = models.resnet50(pretrained=True) # pretrained=False just for debug reasons
+        
+        self.model = models.vgg16(pretrained=True) # pretrained=False just for debug reasons
+        '''
+        self.conv_layer = nn.Conv2d(1, 3, kernel_size=3, stride=1, padding=1, dilation=1, groups=1, bias=True)
+        self.model = nn.Sequential(self.conv_layer, self.resnet)
+        '''
         model_layers = [nn.Conv2d(2, 3, kernel_size=3, stride=1, padding=1, dilation=1, groups=1, bias=True)]
         model_layers.extend(list(self.model.features))
         self.model.features= nn.Sequential(*model_layers)
         #self.model.classifier._modules['6'] = torch.nn.Linear(4096, 15)
         self.model.avgpool = torch.nn.AdaptiveAvgPool2d((1, 1))
         self.model.classifier = torch.nn.Sequential(torch.nn.Linear(512, 15))
+        print(self.model)
+        '''
+        num_ftrs = self.model._modules['1'].fc.in_features
+        self.model._modules['1'].fc = nn.Linear(num_ftrs, 15)
+        print(self.model)
+        '''
         self.rescale = torch.nn.Sigmoid()
-        self.threshold = torch.nn.Threshold(0.5, 1)
-        self.fc1 = nn.Linear(n_attributes, n_groups, bias = False)
+        self.fc1 = nn.Linear(n_attributes, 1, bias = False)
+
+        self.fc1.weight.data = self.fc1.weight.data.relu() / (
+                            self.fc1.weight.data.relu().sum(1, keepdim=True))
+
+        '''
         self.fc2 = nn.Linear(n_groups, 1, bias = False)
         self.fc1.weight.data = self.fc1.weight.data.relu() / (
             self.fc1.weight.data.relu().sum(1, keepdim=True))
         self.fc2.weight.data.fill_(0)
+        '''
         #type_classifier_layers = [nn.Linear(n_attributes, n_groups, bias = False),
         #        nn.Linear(n_groups, 1, bias = False)]
         #type_classifier = nn.Sequential(*type_classifier_layers) 
@@ -292,7 +323,9 @@ class net(torch.nn.Module):
         #data = torch.cat((attributes, torch.squeeze(y, 1)), 1).float()
         #attrib_thres = self.threshold(attributes)
         y = self.fc1(attributes)
+        '''
         y = self.fc2(y)
+        '''
         #x = torch.unsqueeze(x, 2)
         #print(x.size())
         
@@ -373,7 +406,10 @@ def train_model():
             loss = loss1 + loss2 
             loss.backward()
             optimizer.step()
-            model.fc1.weight.data = projection_simplex_sort(model.fc1.weight.data)
+            add_factor = model.fc1.weight.data.min()
+            model.fc1.weight.data = model.fc1.weight.data - add_factor
+            model.fc1.weight.data = model.fc1.weight.data / model.fc1.weight.data.sum()
+            
             running_loss += loss.item()
             loss1_sum += loss1.item()
             loss2_sum += loss2.item()
@@ -385,61 +421,45 @@ def train_model():
     torch.save(model.state_dict(), f'../data/models/end_to_end.pt')
     G = model.fc1.weight.data
     G = G.cpu().numpy()
-    print(G)
-    W = model.fc2.weight.data
     a = n_attributes
-    z = n_groups
+    z = 1
     source = [i % a for i in range(z*a)]
     target = [(i // a) + a for i in range(z*a)]
-    G[G < 0.05] = 0.0
+    '''
+    '''
     value = G.flatten().tolist()
     color_node = [
-              '#808080', '#808080', '#808080', '#808080', '#808080',
-              '#808080', '#808080', '#808080', '#808080', '#808080',
-              '#808080', '#808080', '#808080', '#808080', '#808080',
-              #'#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#FF00FF',
-              #'#00CED1', '#FF8C00', '#BDB76B', '#2F4F4F', '#B8860B'
+              #'#808080', '#808080', '#808080', '#808080', '#808080',
+              #'#808080', '#808080', '#808080', '#808080', '#808080',
+              #'#808080', '#808080', '#808080', '#808080', '#808080',
+              '#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#FF00FF',
+              '#00CED1', '#FF8C00', '#BDB76B', '#2F4F4F', '#B8860B',
+              '#149697', '#00AAC0', '#8080CC', '#333388', '#77CCCC'
               ]
-    color_link = []
-    link_colors = ['#F08080', '#FFFACD', '#98FB98', '#87CEFA', '#FF0000', '#00CED1', '#FF8C00', '#BDB76B', '#2F4F4F', '#B8860B']
-    link_colors = link_colors * ((n_groups // len(link_colors)) + 1)
-    for i in range(a*z):
-        color_link.extend([link_colors[i % len(link_colors)]])
-    
-    '''
     color_link = []
     link_pos_colors = ['#149697', '#00AAC0', '#8080CC', '#333388', '#77CCCC', '#149697', '#00AAC0', '#8080CC', '#333388', '#77CCCC']
     link_neg_colors = ['#E65662', '#FF8066', '#894E3F', '#E79598', '#FDA45C', '#E65662', '#FF8066', '#894E3F', '#E79598', '#FDA45C']
 
-    color_link = []
+    color_link = ['#5d8aa8','#ffbf00','#e52b50','#9966cc','#4b5320','#0d98ba','#480607','#cc5500','#702963','#008b8b','#a52a2a','#004b49','#b8860b','#ff4040','#00009c']
     label = []
-    for i in range(len(source)):
-        if value[i] < 0:
-            color_link.append(link_neg_colors[i%10])
-        else:
-            color_link.append(link_pos_colors[i%10])
+    #for i in range(len(source)):
+    #    if value[i] < 0:
+    #        color_link.append(link_neg_colors[i%10])
+    #    else:
+    #        color_link.append(link_pos_colors[i%10])
 
     value = np.abs(value).tolist()
-    '''
-    group_label = []
-    for i in range(1, n_groups + 1):
-        group_label.append("G" + str(i))
-    label = ["cystic_c", "mostly solid_c", "solid_c", "spongiform_c",
-            "hyper_e", "hypo_e", "iso_e", "marked_e",
-            "ill-defined_m", "micro_m", "spiculated_m", "smooth_m",
-            "macro_ca", "micro_ca", "non_ca"]
-    label.extend(group_label)
+    label = ["cystic composition", "mostly solid composition", "solid composition", "spongiform composition",
+            "hyperechogenicity", "hypoechogenicity", "isoechogenicity", "marked hypoechogenicity",
+            "ill-defined margin", "micro margin", "spiculated margin", "smooth margin",
+            "macro calcification", "micro calcification", "no calcification"]
+    label.append("benign/ malignant")
 
     fig = go.Figure(data=[go.Sankey(
         node = dict(
           pad = 15,
           thickness = 20,
           color = color_node,
-          #label = ["cystic_c", "mostly solid_c", "solid_c", "spongiform_c",
-          #     "hyper_e", "hypo_e", "iso_e", "marked_e",
-          #     "ill-defined_m", "micro_m", "spiculated_m", "smooth_m",
-          #     "macro_ca", "micro_ca", "non_ca",
-          #     "G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8", "G9", "G10"],
           label = label
         ),
         link = dict(
@@ -448,55 +468,13 @@ def train_model():
           value = value,
           color = color_link
       ))])
-    fig.update_layout(title_text="Basic Sankey Diagram", font_size=10)
+    fig.update_layout(title_text="Basic Sankey Diagram", font_size=18)
     fig.show()
-    plotly.offline.plot(fig, filename=f'plot1_{n_groups}_CAM_{expt_num}.html')
+    plotly.offline.plot(fig, filename=f'plot_1fc_CAM_{expt_num}.html')
     #fig.write_image('plot1.png')
     #fig.show()
     #plt.savefig("plot1.png")
     #fig.show()
-    source = [i % z for i in range(z*1)]
-    target = [(i // z) + z for i in range(z*1)] 
-    W = W.cpu().numpy()
-    # W = W - np.amin(W)
-    value = W.flatten()
-    # value = W.flatten().tolist()
-
-    color_node = ['#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#FF00FF', '#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#FF00FF']
-    color_node = color_node * ((n_groups // len(color_node))+ 1)
-    color_link = []
-    link_pos_colors = ['#149697', '#00AAC0', '#8080CC', '#333388', '#77CCCC', '#149697', '#00AAC0', '#8080CC', '#333388', '#77CCCC']
-    link_neg_colors = ['#E65662', '#FF8066', '#894E3F', '#E79598', '#FDA45C', '#E65662', '#FF8066', '#894E3F', '#E79598', '#FDA45C']
-    
-    link_colors = []
-    label = []
-    for i in range(len(source)):
-        if value[i] < 0:
-            link_colors.append(link_neg_colors[i%10])
-        else:
-            link_colors.append(link_pos_colors[i%10])
-        label.append(str(value[i]) + "| G" + str(i+1))
-
-    # ['#F08080', '#FFFACD', '#98FB98', '#87CEFA', '#00CED1']
-    label.append("benign/ malignant")
-    value = np.abs(value).tolist()
-    fig = go.Figure(data=[go.Sankey(
-        node = dict(
-          pad = 15,
-          thickness = 20,
-          color = color_node,
-          label = label,
-          # label = ["G1", "G2", "G3", "G4", "G5", "benign / malignant"],
-        ),
-        link = dict(
-          source = source,
-          target = target,
-          value = value,
-          color = link_colors
-      ))])
-    fig.update_layout(title_text="Basic Sankey Diagram", font_size=10)
-    fig.show()
-    plotly.offline.plot(fig, filename=f'plot2_{n_groups}_CAM_{expt_num}.html')
     #plt.savefig('plot2.png')
     #fig.write_image('plot2.png')
     return model
@@ -541,8 +519,12 @@ def perform_test(model, dataset):
         def hook(model, input, output):
             features[name] = output.detach()
         return hook
+    
     model.model.features.register_forward_hook(get_features('feats'))
+    ###model.resnet.layer4.register_forward_hook(get_features('feats'))
     weight_linear = np.squeeze(model.model.classifier[0].weight.detach().cpu().numpy())
+    ###weight_linear = np.squeeze(model.resnet.fc.weight.detach().cpu().numpy())
+    attrib_sum_weights = [0, 2, 2, 0, 1, 2, 1, 3, 0, 2, 2, 0, 1, 3, 0]
     with torch.no_grad():
         for batch_idx, data in tqdm(enumerate(test_generator), total=totiter):
             x_test = data["image"]
@@ -561,11 +543,15 @@ def perform_test(model, dataset):
             CAMs = returnCAM(FEATS[-1], weight_linear, attrib_list)
             img = np.zeros((252, 252, 3))
             gray_img = data["image"].cpu().numpy()
+            #gray_img = gray_img.reshape((252, 252, 2))
             gray_img = gray_img[0,0,:,:]
+            #cv2.imwrite(f'heatmaps/{file_name}.png', gray_img)
+            #gray_img = gray_img * 255
+            #gray_img = cv2.resize(gray_img, dsize=(252, 252), interpolation=cv2.INTER_CUBIC)
             img[:, :, 0] = gray_img
             img[:, :, 1] = gray_img
             img[:, :, 2] = gray_img
-            # img = img * 255
+            #img = img * 255
             height, width, c = img.shape
             #for i in range(0, n_attributes):
             #    if 
@@ -582,10 +568,22 @@ def perform_test(model, dataset):
             y_test = y_test.detach().cpu().numpy()
             y_test = y_test.flatten()
             #print(predicted, pred_type, y_test, y_type)
+            prob_pred_sum = 0
+            for i in range(n_attributes):
+                prob_pred_sum += predicted[i] * attrib_sum_weights[i]
+            print(predicted, y_test)
             predicted[predicted < 0.5] = 0.0
             predicted[predicted >= 0.5] = 1.0
             pred_type[pred_type < 0.5] = 0.0
             pred_type[pred_type >= 0.5] = 1.0
+            predicted_sum = 0
+            actual_sum = 0
+            for i in range(n_attributes):
+                predicted_sum += predicted[i] * attrib_sum_weights[i]
+                actual_sum += y_test[i] * attrib_sum_weights[i]
+
+            print(f'Predicted probability: {prob_pred_sum} Predicted sum  {predicted_sum} Actual sum {actual_sum} Actual y {y_type} Predicted y {pred_type}')
+            print(predicted, y_test)
             total += 15
             type_total += 1
             pred_type = pred_type.astype(int)
@@ -599,16 +597,16 @@ def perform_test(model, dataset):
                 if predicted[i] != y_test[i] or y_test[i] != 1:
                     continue
                 heatmap = cv2.applyColorMap(cv2.resize(CAMs[i],(width, height)), cv2.COLORMAP_JET)
-                result = heatmap * 0.4 + img
+                result = img + heatmap * 0.4
                 img_m = np.zeros((252, 252, 3))
                 gray_img_m = data["im_masked"].cpu().numpy()
                 img_m[:, :, 0] = gray_img_m
                 img_m[:, :, 1] = gray_img_m
                 img_m[:, :, 2] = gray_img_m
                 img_m = img_m * 255
-                print(img_m.shape)
                 result = cv2.hconcat([result, img_m])
-                cv2.imwrite(f'heatmaps{expt_num}/{file_name}_{i}.png', result)
+                h_file_name = f'heatmaps{expt_num}/{file_name}_{i}.png'
+                cv2.imwrite(h_file_name, result)
             if y_type[0] == pred_type[0]:
                 type_correct += 1
             for i in range(15):
@@ -622,8 +620,8 @@ def perform_test(model, dataset):
     type_acc = 100 * type_correct / type_total
     FEATS = np.concatenate(FEATS)
     print('- feats shape:', FEATS.shape)
-    with open("results_unmasked.txt", "a") as file1:
-        file1.write(str(n_groups) + '   ' + str(type_acc) + '  ' + str(accuracy) + '\n')
+    with open("results_unmasked_fc1.txt", "a") as file1:
+        file1.write(str(type_acc) + '  ' + str(accuracy) + '\n')
 
 model = train_model()
 # perform_test(model, thyroidDataset())
