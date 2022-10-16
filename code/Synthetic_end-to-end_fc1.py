@@ -381,7 +381,7 @@ def train_model():
     print(model)
     criterion = torch.nn.BCELoss(reduction='mean')
     optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)
-    for epoch in range(1000):
+    for epoch in range(1):
         running_loss = 0.0
         loss1_sum = 0.0
         loss2_sum = 0.0
@@ -449,10 +449,13 @@ def train_model():
     #        color_link.append(link_pos_colors[i%10])
 
     value = np.abs(value).tolist()
-    label = ["cystic composition", "mostly solid composition", "solid composition", "spongiform composition",
+    attrib_names = ["cystic composition", "mostly solid composition", "solid composition", "spongiform composition",
             "hyperechogenicity", "hypoechogenicity", "isoechogenicity", "marked hypoechogenicity",
             "ill-defined margin", "micro margin", "spiculated margin", "smooth margin",
             "macro calcification", "micro calcification", "no calcification"]
+    label = []
+    for i in range(len(source)):
+        label.append(f'{value[i]:.2f} | {attrib_names[i]}')
     label.append("benign/ malignant")
 
     fig = go.Figure(data=[go.Sankey(
