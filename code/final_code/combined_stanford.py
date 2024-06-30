@@ -32,14 +32,17 @@ import sys
 from VGG16 import VGG16
 from SegNet import SegNet
 from CombNet import CombNet
+from CombNet_pool import CombNet_pool
 # In[4]:
 
 n_attributes = 14
 n_groups = 4
 expt_num = sys.argv[1]
-PATH = f'../../data/models/segment_stanford_combined_SegNet_reproduce_sampled.pt'
+PATH = f'../../data/models/stanford_running_loss_combined_P_loss_reproduce_sampled.pt'
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_cuda else "cpu")    
+EPOCHS = 170
+EPOCH_CLASSIFIER = 149
 """
 def projection_simplex_sort(v, z=1):
     '''
@@ -140,6 +143,7 @@ class thyroidActualDataset(Dataset):
         #im = im[:,:,:2]
         im = im[:,:,:1]
         mask = mask[:,:,:1]
+        masked = im * mask
          # Adding data augmentation to avoid overfitting
         aug = True
         if self.split != "test" and self.split != "val" and aug == True:
@@ -147,9 +151,11 @@ class thyroidActualDataset(Dataset):
                 if random.randint(1, 10) > 5:
                     im = np.flipud(im)
                     mask = np.flipud(mask)
+                    masked = np.flipud(masked)
                 else: #elif random.randint(1, 10) > 5:
                     im = np.fliplr(im)
                     mask = np.fliplr(mask)
+                    masked = np.fliplr(masked)
                 #elif random.randint(1, 10) > 5:
                 #    for i in range(random.randint(1, 4)):
                 #        im = np.rot90(im)
@@ -164,14 +170,16 @@ class thyroidActualDataset(Dataset):
                     #cv2.imwrite(f'heatmaps/{name}.png', im)
             im = np.ascontiguousarray(im)
             mask = np.ascontiguousarray(mask)
+            masked = np.ascontiguousarray(masked)
         transforms = Compose([ToTensor()])
         im = transforms(im)
+        masked = transforms(masked)
         mask = torch.from_numpy(mask).long().view(256,256)
         #im_masked = transforms(im_masked)
         labels =  torch.from_numpy(labels)
         labels = labels.type(torch.LongTensor)
         #labels = torch.unsqueeze(labels, 0)
-        sample = {"image": im.float(), "mask": mask, "comp": labels[1], "echo": labels[2], "margin": labels[3], "calc": labels[4], "type": torch.unsqueeze(labels[0], 0), "filename": name}
+        sample = {"image": im.float(), "mask": mask, "masked": masked.float(), "comp": labels[1], "echo": labels[2], "margin": labels[3], "calc": labels[4], "type": torch.unsqueeze(labels[0], 0), "filename": name}
         return sample
 
 
@@ -208,13 +216,14 @@ def train_model():
     model = model.to(device)
     print(model)
     criterion = torch.nn.CrossEntropyLoss(reduction="mean")
+    criterion2 = torch.nn.MSELoss()
     #criterion1 = torch.nn.BCELoss(reduction="mean")
     optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)
     #best_loss1 = float('inf')
     best_acc = 0.0
     best_epoch = -1
 
-    for epoch in range(170):    
+    for epoch in range(EPOCHS):    
         running_loss = 0.0
         #loss1_sum = 0.0 #attributes loss
         #loss2_sum = 0.0 # type loss
@@ -227,8 +236,9 @@ def train_model():
             y_echo = data["echo"]
             y_margin = data["margin"]
             y_calc = data["calc"]
+            x_masked = data["masked"]
             #y_type = data["type"]
-            x_train, y_mask = (x_train.to(device), y_mask.to(device))
+            x_train, y_mask, x_masked = (x_train.to(device), y_mask.to(device), x_masked.to(device))
             y_comp, y_echo, y_margin, y_calc = (
                 y_comp.to(device),
                 y_echo.to(device),
@@ -236,10 +246,13 @@ def train_model():
                 y_calc.to(device),
             )
             optimizer.zero_grad()
-
-            pred_mask, pred_comp, pred_echo, pred_margin, pred_calc = model(x_train)
+            masked_results = model(x_masked)
+            #masked_results = masked_results.detach()
+            linear_masked_features = masked_results[-1]
+            linear_masked_features = linear_masked_features.detach()
+            pred_mask, pred_comp, pred_echo, pred_margin, pred_calc, features, linear_features = model(x_train)
             #print(y_mask.size())
-            if epoch > 150:
+            if epoch > EPOCH_CLASSIFIER:
             	#pred_comp = torch.unsqueeze(pred_comp, 1)
             	#pred_echo = torch.unsqueeze(pred_echo, 1)
             	#pred_margin = torch.unsqueeze(pred_margin, 1)
@@ -248,12 +261,13 @@ def train_model():
                 loss_e = criterion(pred_echo, y_echo)
                 loss_m = criterion(pred_margin, y_margin)
                 loss_ca = criterion(pred_calc, y_calc)
+                loss_p = criterion2(linear_masked_features,linear_features)
             	#loss2 = criterion1(target.float(), y_type.float())
-                loss_a = loss_co + loss_e + loss_m + loss_ca
+                loss_a = loss_co + loss_e + loss_m + loss_ca + loss_p
             
             loss_b = criterion(pred_mask, y_mask)
             
-            if epoch > 150:
+            if epoch > EPOCH_CLASSIFIER:
                 loss = loss_a + loss_b
             else:
                 loss = loss_b
@@ -268,16 +282,16 @@ def train_model():
         val_acc = perform_test(model, thyroidActualDataset('val'), display=False)
 
 
-        if val_acc > best_acc and epoch > 150:
-            torch.save(model.state_dict(), PATH.replace("_stanford", "_stanford_running_loss"))
+        if val_acc > best_acc and epoch > EPOCH_CLASSIFIER:
+            torch.save(model.state_dict(), PATH.replace("stanford", "stanford_running_loss"))
             best_acc = val_acc
             best_epoch = epoch
 
         print('[%d] loss: %.3f' %
                   (epoch + 1, running_loss / totiter))
         
-        if epoch > 150:
-            print(loss_a, loss_b)
+        if epoch > EPOCH_CLASSIFIER:
+            print(loss_a, loss_b, loss_p)
         #print(loss1_sum, loss2_sum, running_loss)
         
     print("Training complete")
@@ -515,7 +529,7 @@ def perform_test(model, dataset, display=False):
             )
             x_test, y_mask = (x_test.to(device), y_mask.to(device))
             #print(x_test)
-            pred_mask, pred_comp, pred_echo, pred_margin, pred_calc = model(x_test)
+            pred_mask, pred_comp, pred_echo, pred_margin, pred_calc, features, linear_features = model(x_test)
             #FEATS.append(features['feats'].cpu().numpy())
             #attrib_list = [i for i in range(0, n_attributes)]
             # Fetching CAM
@@ -649,14 +663,14 @@ def perform_test(model, dataset, display=False):
 
 if __name__ == "__main__":
     #torch.use_deterministic_algorithms(True)
-    model, best_epoch = train_model()
-    print(best_epoch)
+    #model, best_epoch = train_model()
+    #print(best_epoch)
     #torch.use_deterministic_algorithms(True)
-    #model = SegNet()
+    model = CombNet()
 
-    #model = model.to(device)
-    #model.load_state_dict(torch.load(PATH))
-    #perform_test(model, thyroidActualDataset('test'), display=False)
+    model = model.to(device)
+    model.load_state_dict(torch.load(PATH))
+    perform_test(model, thyroidActualDataset('test'), display=False)
     #perform_test(model, thyroidActualDataset('training'), display=False)
     #perform_test(model, thyroidActualDataset('val'), display=False)
 
