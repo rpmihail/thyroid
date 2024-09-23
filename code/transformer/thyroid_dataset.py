@@ -100,7 +100,7 @@ class thyroidDataset(Dataset):
         im_name = list(self.cases[idx].glob('*[0-9].jpg'))[0]
         im = cv2.imread(str(im_name))[:, :, 0]
         mask = np.zeros(np.shape(im))
-        im = cv2.resize(im, dsize=self.im_size, interpolation=cv2.INTER_CUBIC)
+        im = cv2.resize(im, dsize=self.im_size, interpolation=cv2.INTER_CUBIC) / 256.0
         
         # add mask 
         for polygon in poly_data:
@@ -113,8 +113,11 @@ class thyroidDataset(Dataset):
             cv2.fillPoly(mask, pts = [contour], color =(1, 1, 1))
         
         #mask = cv2.resize(mask, dsize=(300, 300), interpolation=cv2.INTER_LINEAR)
+        
         mask = cv2.resize(mask, dsize=self.im_size, interpolation=cv2.INTER_LINEAR)
         
+
+        im = im * mask
         
         
         # Adding data augmentation to avoid overfitting
@@ -140,7 +143,6 @@ class thyroidDataset(Dataset):
         mask = transforms(mask)
         im = transforms(im)
         
-        # im = im * mask
         
         im = im.type(torch.FloatTensor)
         #sample = {"image": im, "mask": mask, "patches": tensor_patches, "labels": torch.from_numpy(labels), "types" : self.types, "name": str(im_name)}

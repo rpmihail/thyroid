@@ -41,14 +41,25 @@ training_generator = torch.utils.data.DataLoader(training_set, **parameters_trai
 testing_set = thyroidDataset(split='test')
 testing_generator = torch.utils.data.DataLoader(testing_set, **parameters_test, sampler=torch.utils.data.WeightedRandomSampler(testing_set.sample_weights, len(testing_set.cases), replacement=True))
 
-## test dataloader
-#fig, ax = plt.subplots(1, 3)
-#for item in training_set:
-#  ax[0].imshow(item["mask"][0, :, :], cmap="gray")
-#  ax[1].imshow(item["image"][0, :, :], cmap="gray")
-#  ax[2].imshow(item["image"][0, :, :] + item["mask"][0, :, :], cmap="gray")
-#  break
+# %%
 
+## test dataloader
+fig, ax = plt.subplots(16, 16, figsize=(10, 10))
+patch_nr = 0
+for item in training_set:
+  for i in range(16):
+      for j in range(16):
+          ax[i, j].imshow(np.reshape(item["patches"][patch_nr, :], (16, 16)), cmap="gray")
+          ax[i, j].xaxis.set_ticks([])
+          ax[i, j].yaxis.set_ticks([])
+          #ax[i, j].yaxis.set_visible("false")
+          patch_nr += 1
+  #ax[1].imshow(item["image"][0, :, :] + item["mask"][0, :, :], cmap="gray")
+  break
+# %%
+
+
+# %%
 
 
 step = 16
@@ -211,9 +222,9 @@ class MyViT(nn.Module):
 
 
 
+# %%
 
-
-#model = MyViT( ).to(device)
+model = MyViT( ).to(device)
 
 #x = torch.randn(7, 256, 256) # Dummy images
 #print(model(x)) # torch.Size([7, 49, 16])
@@ -255,16 +266,21 @@ torch.save(model.state_dict(), "../../data/models/transformer_v1.pt")
 test_loss = 0
 
 np.set_printoptions(formatter={'float': lambda x: "{0:0.5f}".format(x)})
-
+correct = 0
+total = 0
 for batch in testing_generator:
-    
+    total += 1
     x, y = batch["patches"], batch["labels"]
     x, y = x.to(device), y.to(device)
     
     y_hat = model(x)
     loss = criterion(y_hat, y)
 
-    test_loss += loss.detach().cpu().item() / len(training_generator)
+    if y[0] == y_hat.argmax():
+        correct += 1
+
+    test_loss = loss.detach().cpu().item() #/ len(training_generator)
+
 
     #optimizer.zero_grad()
     #loss.backward()
@@ -275,5 +291,6 @@ for batch in testing_generator:
     print(x)
     print(f"Loss: {test_loss}\n")
 
+print("Accuract:", correct / total)
 
 
