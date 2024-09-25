@@ -52,9 +52,10 @@ for item in training_set:
           ax[i, j].imshow(np.reshape(item["patches"][patch_nr, :], (16, 16)), cmap="gray")
           ax[i, j].xaxis.set_ticks([])
           ax[i, j].yaxis.set_ticks([])
-          #ax[i, j].yaxis.set_visible("false")
+          ax[i, j].yaxis.set_visible("false")
           patch_nr += 1
-  #ax[1].imshow(item["image"][0, :, :] + item["mask"][0, :, :], cmap="gray")
+          ax[i, j].text(i, j, str(patch_nr), c = 'r')
+  ax[1].imshow(item["image"][0, :, :] + item["mask"][0, :, :], cmap="gray")
   break
 # %%
 
@@ -63,24 +64,6 @@ for item in training_set:
 
 
 step = 16
-
-for item in training_generator:
-    im = item["patches"]
-    #patches = patchify(im, (16, 16), 16)
-    break
-
-
-#fig, ax = plt.subplots(16, 16, figsize=(10, 10))
-#for i in range(16):
-#    for j in range(16):
-#        ax[i, j].imshow(patches[i, j, :, :])
-        
-#tensor_patches = np.reshape(patches, (16*16, step*step) )
-
-
-
-
-
 device = "cuda"
 
 import torch.nn as nn
@@ -149,8 +132,8 @@ class MyViTBlock(nn.Module):
 
     def forward(self, x):
         out = x + self.mhsa(self.norm1(x))
-        out = out + self.mlp(self.norm2(out))
-        return out
+        out_final = out + self.mlp(self.norm2(out))
+        return out_final, out
 
 
 class MyViT(nn.Module):
@@ -163,7 +146,7 @@ class MyViT(nn.Module):
     
     self.hidden_d = 16
     
-    self.n_blocks = 16
+    self.n_blocks = 3
     self.n_heads = 16
     
     self.out_d = 2
@@ -212,13 +195,14 @@ class MyViT(nn.Module):
     
     # Transformer Blocks
     for block in self.blocks:
-        out = block(out)
+        out, attention = block(out)
         
     # Getting the classification token only
+    
     out = out[:, 0]
     
     
-    return self.mlp(out)
+    return attention, self.mlp(out)
 
 
 
@@ -230,22 +214,31 @@ model = MyViT( ).to(device)
 #print(model(x)) # torch.Size([7, 49, 16])
 
 N_EPOCHS = 100000
-LR = 0.0001
+LR = 0.0005
 
 # %%
 
-    # Training loop
+# Training loop
 optimizer = Adam(model.parameters(), lr=LR)
 criterion = CrossEntropyLoss()
 for epoch in range(N_EPOCHS):
     train_loss = 0.0
+    correct = 0
+    total = 0
     for batch in training_generator:
         
         x, y = batch["patches"], batch["labels"]
         x, y = x.to(device), y.to(device)
         
-        y_hat = model(x)
+        attention, y_hat = model(x)
         loss = criterion(y_hat, y)
+
+        if y[0] == y_hat.argmax():
+            correct += 1
+            
+        batch_error = float((torch.sum(torch.abs(y_hat.argmax(dim=1) - y)) / y.size()[0]).detach().cpu().numpy())
+        print("Batch error:", batch_error)
+
 
         train_loss += loss.detach().cpu().item() / len(training_generator)
 
@@ -258,6 +251,25 @@ for epoch in range(N_EPOCHS):
             print(np.concatenate((y_hat.detach().cpu().numpy(),  np.expand_dims(y.detach().cpu().numpy(), -1)), axis=1))
 
 
+# %%
+
+#p = x[2, :].detach().cpu().numpy()
+
+plt.imshow(np.reshape(attention[0, :256, 9].detach().cpu().numpy(), (16, 16)))
+
+fig, ax = plt.subplots(16, 16)
+patch_nr = 0
+for i in range(16):
+    for j in range(16):
+        ax[i, j].imshow(np.reshape(p[patch_nr, :], (16, 16)), cmap="gray")
+        ax[i, j].xaxis.set_ticks([])
+        ax[i, j].yaxis.set_ticks([])
+        ax[i, j].yaxis.set_visible("false")
+        patch_nr += 1
+        #ax[i, j].text(i, j, str(patch_nr), c = 'r')
+
+# %%
+np.shape(p)
 # %%
 
 torch.save(model.state_dict(), "../../data/models/transformer_v1.pt")
@@ -273,7 +285,7 @@ for batch in testing_generator:
     x, y = batch["patches"], batch["labels"]
     x, y = x.to(device), y.to(device)
     
-    y_hat = model(x)
+    test, y_hat = model(x)
     loss = criterion(y_hat, y)
 
     if y[0] == y_hat.argmax():
@@ -286,11 +298,50 @@ for batch in testing_generator:
     #loss.backward()
     #optimizer.step()
 
-    x = np.concatenate((y_hat.detach().cpu().numpy(),  np.expand_dims(y.detach().cpu().numpy(), -1)), axis=1)
+    x1 = np.concatenate((y_hat.detach().cpu().numpy(),  np.expand_dims(y.detach().cpu().numpy(), -1)), axis=1)
     
-    print(x)
+    print(x1)
     print(f"Loss: {test_loss}\n")
 
-print("Accuract:", correct / total)
+print("Accuracy:", correct / total)
+
+
+# %%
+embeddings = np.zeros((0, 16))
+labels = np.zeros((0, 1))
+for batch in testing_generator:
+    x, y = batch["patches"], batch["labels"]
+    x, y = x.to(device), y.to(device)
+    test, y_hat = model(x)
+    embeddings = np.concatenate((embeddings, test[:, 0].cpu().detach().numpy()), axis=0)
+    labels = np.concatenate((labels, np.expand_dims(y.detach().cpu().numpy(), axis=-1))  ,axis=0)
+
+#for batch in training_generator:
+#    x, y = batch["patches"], batch["labels"]
+#    x, y = x.to(device), y.to(device)
+#    test, y_hat = model(x)
+#    embeddings = np.concatenate((embeddings, test[:, 0].cpu().detach().numpy()), axis=0)
+#    labels = np.concatenate((labels, np.expand_dims(y.detach().cpu().numpy(), axis=-1))  ,axis=0)
+    
+# %%
+    
+from sklearn.manifold import TSNE
+
+X_embedded = TSNE(n_components=2, learning_rate='auto',
+                  init='random', perplexity=3).fit_transform(embeddings)
+
+plt.scatter(X_embedded[:, 0], X_embedded[:, 1], c=labels)
+
+# %%
+
+from sklearn.decomposition import PCA
+pca = PCA(n_components=2)
+pca.fit(embeddings)
+
+X_embedded = pca.fit_transform(embeddings)
+
+plt.scatter(X_embedded[:, 0], X_embedded[:, 1], c = labels, s = 1)
+plt.colorbar()
+
 
 
