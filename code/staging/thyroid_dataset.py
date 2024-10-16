@@ -15,6 +15,7 @@ from torchvision import transforms
 import random
 from pathlib import Path
 import xml.etree.ElementTree as ET
+import matplotlib.pyplot as plt
 import json
 import cv2
 from torchvision.transforms import Compose
@@ -48,7 +49,7 @@ class thyroidDataset(Dataset):
         
         self.patch_size = 16
         
-        self.scores = [0, 1, 1, 2, 0,    0, 1, 2, 1, 3,    0, 0, 2, 2, 3,    1, 3, 2, 3,   100]
+        self.scores = [0, 1, 1, 2, 0,    0, 1, 2, 1, 3,    0, 0, 2, 2, 3,    1, 3, 2, 3,   50]
         
         self.types_count = []
         
@@ -72,6 +73,35 @@ class thyroidDataset(Dataset):
         self.sample_weights = [1/self.types_count[label] for label in self.types]
     def __len__(self):
         return len(self.cases)
+    
+    
+    def translate(self, img, shift, direction):
+        roll=True
+        assert direction in [0, 1, 2, 3], 'Directions should be top|up|left|right'
+        #print(np.shape(img))
+        img = img.copy()
+        if direction == 0:
+            right_slice = img[:, -shift:].copy()
+            img[:, shift:] = img[:, :-shift]
+            if roll:
+                img[:,:shift] = np.fliplr(right_slice)
+        if direction == 1:
+            left_slice = img[:, :shift].copy()
+            img[:, :-shift] = img[:, shift:]
+            if roll:
+                img[:, -shift:] = left_slice
+        if direction == 2:
+            down_slice = img[-shift:, :].copy()
+            img[shift:, :] = img[:-shift,:]
+            if roll:
+                img[:shift, :] = down_slice
+        if direction == 3:
+            upper_slice = img[:shift, :].copy()
+            img[:-shift, :] = img[shift:, :]
+            if roll:
+                img[-shift:,:] = upper_slice
+        return img
+
   
     def __getitem__(self, idx):
         labels = np.zeros(20, dtype = float)
@@ -121,21 +151,24 @@ class thyroidDataset(Dataset):
         #mask = cv2.resize(mask, dsize=(300, 300), interpolation=cv2.INTER_LINEAR)
         
         mask = cv2.resize(mask, dsize=self.im_size, interpolation=cv2.INTER_LINEAR)
-        
 
         #im = im * mask
+
+        
+        im = self.translate(im, np.random.randint(-20, 0), np.random.randint(0, 4))
+
         
         
         # Adding data augmentation to avoid overfitting
         
-        #if random.randint(1, 10) > 5:
-        #    im = np.flipud(im)
-        #if random.randint(1, 10) > 5:
-        #    im = np.fliplr(im)
-        #if random.randint(1, 10) > 5:
-        #    for i in range(random.randint(1, 4)):
-        #        im = np.rot90(im)
-        #im = np.ascontiguousarray(im)
+        if random.randint(1, 10) > 5:
+            im = np.flipud(im)
+        if random.randint(1, 10) > 5:
+            im = np.fliplr(im)
+        if random.randint(1, 10) > 5:
+            for i in range(random.randint(1, 4)):
+                im = np.rot90(im)
+        im = np.ascontiguousarray(im)
 
         #plt.figure()
         #plt.imshow(im)
