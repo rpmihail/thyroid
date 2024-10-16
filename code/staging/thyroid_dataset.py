@@ -31,11 +31,11 @@ class thyroidDataset(Dataset):
         self.all_data = []
         self.compositions = {'Unknown':0, 'cystic':1,
                              'predominantly solid':2,
-                             'solid':3, 'spongiform appareance':4}
+                             'solid': 3, 'spongiform appareance': 4}
         
         self.echogenicities = {'Unknown':0, 'hyperechogenecity':1,
                              'hypoechogenecity':2, 'isoechogenicity':3,
-                             'marked hypoechogenecity':4}
+                             'marked hypoechogenecity': 4}
         
         self.margins = {'Unknown':0, 'ill- defined':1, 'microlobulated':2,
                         'spiculated':3, 'well defined smooth':4}
@@ -48,6 +48,7 @@ class thyroidDataset(Dataset):
         
         self.patch_size = 16
         
+        self.scores = [0, 1, 1, 2, 0,    0, 1, 2, 1, 3,    0, 0, 2, 2, 3,    1, 3, 2, 3,   100]
         
         self.types_count = []
         
@@ -61,33 +62,33 @@ class thyroidDataset(Dataset):
             self.all_data.extend(data_list)
         
 
-        print(self.all_data)        
+        #print(self.all_data)        
         random.shuffle(self.all_data)
         
         
         
         self.cases, self.types = zip(*self.all_data)
-        print("number of data items:" + str(len(self.cases)))
+        #print("number of data items:" + str(len(self.cases)))
         self.sample_weights = [1/self.types_count[label] for label in self.types]
     def __len__(self):
         return len(self.cases)
   
     def __getitem__(self, idx):
-        labels = np.zeros(16, dtype = float)
+        labels = np.zeros(20, dtype = float)
         xml_data = ET.parse(list(self.cases[idx].glob('*[0-9].xml'))[0]).getroot()
         for x in xml_data:
             if x.tag=='composition' and x.text is not None:
                 composition = x.text
-                labels[self.compositions[composition] - 1] = 1.0
+                labels[self.compositions[composition] ] = 1.0
             if x.tag=='echogenicity' and x.text is not None:
                 echogenicity = x.text
-                labels[self.echogenicities[echogenicity] + 3] = 1.0
+                labels[self.echogenicities[echogenicity] + 5] = 1.0
             if x.tag=='margins' and x.text is not None:
                 margin = x.text
-                labels[self.margins[margin] + 7] = 1.0
+                labels[self.margins[margin] + 10] = 1.0
             if x.tag=='calcifications' and x.text is not None:
                 calcification = x.text
-                labels[self.calcifications[calcification] + 11] = 1.0
+                labels[self.calcifications[calcification] + 15] = 1.0
         
         xml_data = ET.parse(list(self.cases[idx].glob('*[0-9].xml'))[0]).find("mark")
         
@@ -96,7 +97,12 @@ class thyroidDataset(Dataset):
                 encoded = str(x.text)
                 poly_data = json.loads(x.text)
         
-        labels[15] = list(self.types)[idx]
+        if list(self.types)[idx] == 1:
+            labels[19] = 1
+            
+        
+        
+        
         im_name = list(self.cases[idx].glob('*[0-9].jpg'))[0]
         im = cv2.imread(str(im_name))[:, :, 0]
         mask = np.zeros(np.shape(im))
@@ -117,35 +123,38 @@ class thyroidDataset(Dataset):
         mask = cv2.resize(mask, dsize=self.im_size, interpolation=cv2.INTER_LINEAR)
         
 
-        im = im * mask
+        #im = im * mask
         
         
         # Adding data augmentation to avoid overfitting
-        if random.randint(1, 10) > 5:
-            im = np.flipud(im)
-        if random.randint(1, 10) > 5:
-            im = np.fliplr(im)
-        if random.randint(1, 10) > 5:
-            for i in range(random.randint(1, 4)):
-                im = np.rot90(im)
-        im = np.ascontiguousarray(im)
+        
+        #if random.randint(1, 10) > 5:
+        #    im = np.flipud(im)
+        #if random.randint(1, 10) > 5:
+        #    im = np.fliplr(im)
+        #if random.randint(1, 10) > 5:
+        #    for i in range(random.randint(1, 4)):
+        #        im = np.rot90(im)
+        #im = np.ascontiguousarray(im)
 
         #plt.figure()
         #plt.imshow(im)
         
         
-        patches = patchify(im, (self.patch_size, self.patch_size), self.patch_size)
-        tensor_patches = np.reshape(patches, (self.patch_size**2, self.patch_size*self.patch_size) )
+        #patches = patchify(im, (self.patch_size, self.patch_size), self.patch_size)
+        #tensor_patches = np.reshape(patches, (self.patch_size**2, self.patch_size*self.patch_size) )
         
-        tensor_patches = torch.FloatTensor(tensor_patches)
+        #tensor_patches = torch.FloatTensor(tensor_patches)
 
         transforms = Compose([ToTensor()])
         mask = transforms(mask)
         im = transforms(im)
         
+        #print(torch.from_numpy(labels.dot(self.scores)))
         
         im = im.type(torch.FloatTensor)
         #sample = {"image": im, "mask": mask, "patches": tensor_patches, "labels": torch.from_numpy(labels), "types" : self.types, "name": str(im_name)}
-        sample = {"patches": tensor_patches, "labels": torch.from_numpy(np.array(int(labels[15])))}
+        sample = {"images": im, "mask": mask, "labels": torch.from_numpy(labels), "scores": torch.from_numpy(np.array(labels.dot(self.scores))), "types" : self.types, "name": str(im_name)}
+        #sample = {"images": tensor_patches, "labels": torch.from_numpy(np.array(int(labels[15])))}
         return sample
     

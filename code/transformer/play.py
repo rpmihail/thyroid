@@ -55,7 +55,7 @@ for item in training_set:
           ax[i, j].yaxis.set_visible("false")
           patch_nr += 1
           ax[i, j].text(i, j, str(patch_nr), c = 'r')
-  ax[1].imshow(item["image"][0, :, :] + item["mask"][0, :, :], cmap="gray")
+  #ax[1].imshow(item["image"][0, :, :] + item["mask"][0, :, :], cmap="gray")
   break
 # %%
 
@@ -146,7 +146,7 @@ class MyViT(nn.Module):
     
     self.hidden_d = 16
     
-    self.n_blocks = 3
+    self.n_blocks = 12
     self.n_heads = 16
     
     self.out_d = 2
@@ -218,8 +218,18 @@ LR = 0.0005
 
 # %%
 
-# Training loop
+#checkpoint = torch.load("../../data/models/transformer_v10.pt")
+#model.load_state_dict(checkpoint)
+
+
+#optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+#torch.load(model.state_dict(), "../../data/models/transformer_v1.pt")
+
+# %%
 optimizer = Adam(model.parameters(), lr=LR)
+
+# Training loop
+
 criterion = CrossEntropyLoss()
 for epoch in range(N_EPOCHS):
     train_loss = 0.0
@@ -237,6 +247,11 @@ for epoch in range(N_EPOCHS):
             correct += 1
             
         batch_error = float((torch.sum(torch.abs(y_hat.argmax(dim=1) - y)) / y.size()[0]).detach().cpu().numpy())
+        
+        file = open("train_error.txt", "a")
+        print(batch_error, file=file)
+        file.close()
+        
         print("Batch error:", batch_error)
 
 
@@ -247,8 +262,28 @@ for epoch in range(N_EPOCHS):
         optimizer.step()
 
         print(f"Epoch {epoch + 1}/{N_EPOCHS} loss: {train_loss:.2f}", end="\n")
-        if(epoch % 5 == 0):
-            print(np.concatenate((y_hat.detach().cpu().numpy(),  np.expand_dims(y.detach().cpu().numpy(), -1)), axis=1))
+        
+        
+        if(epoch % 10 == 0):
+            #print(np.concatenate((y_hat.detach().cpu().numpy(),  np.expand_dims(y.detach().cpu().numpy(), -1)), axis=1))
+            torch.save(model.state_dict(), "../../data/models/transformer_v10.pt")
+            print("caclulate accuracy on test set")
+            for batch in testing_generator:
+                total += 1
+                x, y = batch["patches"], batch["labels"]
+                x, y = x.to(device), y.to(device)
+                
+                test, y_hat = model(x)
+                loss = criterion(y_hat, y)
+                if y[0] == y_hat.argmax():
+                    correct += 1
+
+            print("Test accuracy:", correct / total)
+            f = open("test_accuracy.txt", "a")
+            print(correct/total, file=f)
+            f.close()
+            
+            
 
 
 # %%
