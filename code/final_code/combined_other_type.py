@@ -28,15 +28,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 import os
 from torchmetrics import JaccardIndex
-from torch import FloatTensor
 import sys
 from VGG16 import VGG16
 from SegNet import SegNet
 from CombNet import CombNet
 from CombNet_pool import CombNet_pool
 from CombNet_pool_type import CombNet_pool_type
-from CombNet_type import CombNet_type
-
 # In[4]:
 
 n_attributes = 14
@@ -45,29 +42,30 @@ expt_num = sys.argv[1]
 PATH = f'../../data/models/segment_stanford_type_acc_combined_pool_reproduce_sampled_64_7.pt'
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_cuda else "cpu")    
-EPOCHS = 170
-EPOCH_CLASSIFIER = 150
-TYPE_EPOCHS = 50
-    
+"""
+def projection_simplex_sort(v, z=1):
+    '''
+    Used to nomalize the G matrix for mpping from attributes to groups
+    '''
+
+    n_features = v.size(1)
+    u,_ = torch.sort(v, descending=True)
+    cssv = torch.cumsum(u,1) - z
+    ind = torch.arange(n_features).type_as(v) + 1
+    cond = u - cssv / ind > 0
+    #rho = ind[cond][-1]
+    rho,ind_rho = (ind*cond).max(1)
+    #theta = cssv[cond][-1] / float(rho)
+    theta = torch.gather(cssv,1,ind_rho[:,None]) / rho[:,None]
+    w = torch.clamp(v - theta, min=0)
+    return w
+"""
+
 class thyroidActualDataset(Dataset):
     def __init__(self, split):
-        with open('../legacy_code/labels_stanford_' + split + '.txt') as f:
-            self.cases = f.read().splitlines()
-            self.samples = []
-            for case in self.cases:
-                case_num = case.split(',')[0]
-                files = glob.glob('/home/aroychoudhury/Stanford_thyroid/thyroidultrasoundcineclip/images/' + case_num + '*')
-                case_data = case.split(',')[1:]
-                for file_name in files: #[:1]:
-                    file_no_ext = file_name.split('.')[0]
-                    case_frame = file_no_ext.split('/')[-1]
-                    if split == 'training' and int(case_frame.split('_')[-1]) % 10 == 0:
-                        sample = case.replace(case_num, file_name)
-                        self.samples.append(sample)
-                    elif split != 'training': #and int(case_frame.split('_')[-1]) % 10 == 0:
-                        sample = case.replace(case_num, file_name)
-                        self.samples.append(sample)
-                    
+        with open('labels_unf_single_' + split + '.txt') as f:
+            self.samples = f.read().splitlines()
+
 
         self.split = split
         #if len(self.samples) > 73:
@@ -78,15 +76,13 @@ class thyroidActualDataset(Dataset):
 
     def __getitem__(self, idx):
         data_list = self.samples[idx].split(', ')
-        name = data_list[0]
+        f_name = data_list[0]
+        name = '/home/aroychoudhury/thyroid_git/thyroid/data/images/' + f_name + '_1.jpg'
         #print(name)
         labels = data_list[15:20]
         labels = [float(element) for element in labels]
         labels = np.array(labels)
-        if int(data_list[21]) > 3:
-             labels[0] = 1
-        else:
-             labels[0] = 0
+        print(name)
         #xml_data = ET.parse('/home/ahana/thyroid/data/thyroid/'+ name + '.xml').find("mark")
         #for x in xml_data:
         #    if(x.tag=='svg'):
@@ -111,7 +107,8 @@ class thyroidActualDataset(Dataset):
             #        ys.append(point["y"])
             #    contour = np.concatenate((np.expand_dims(xs, 1), np.expand_dims(ys, 1)), axis=1)
             #    cv2.fillPoly(mask, pts = [contour], color =(1, 1, 1))
-            mask = cv2.imread(str(name).replace('images','masks_new'))
+            m_name = name.replace('_1.jpg','.png')
+            mask = cv2.imread(str(m_name).replace('images','masks_all'))
             #print(str(name).replace('images','masks'))
             #masked_im = mask * im1
             #masked_im = cv2.resize(masked_im, dsize=(252, 252), interpolation=cv2.INTER_LINEAR)
@@ -123,18 +120,17 @@ class thyroidActualDataset(Dataset):
             mask = cv2.resize(mask, dsize=(256, 256), interpolation=cv2.INTER_CUBIC)
             im1 = cv2.resize(im1, dsize=(256, 256), interpolation=cv2.INTER_CUBIC)
             im[:220,:,:] = im1[:220,:,:]
-           
+
             #cv2.imwrite('/home/ahana/test_stanford_images/' + name.split('/')[-1], im)
             #cv2.imwrite('images_check/' + name + '_orig.png', im)
         #else:
         #    im = np.zeros((252, 252, 3))
-        
+
         # Creating 2 channel input
         #im[:, :, 1] = masked_im
         #im = im[:,:,:2]
         im = im[:,:,:1]
         mask = mask[:,:,:1]
-        masked = im * mask
          # Adding data augmentation to avoid overfitting
         aug = True
         if self.split != "test" and self.split != "val" and aug == True:
@@ -142,11 +138,9 @@ class thyroidActualDataset(Dataset):
                 if random.randint(1, 10) > 5:
                     im = np.flipud(im)
                     mask = np.flipud(mask)
-                    masked = np.flipud(masked)
                 else: #elif random.randint(1, 10) > 5:
                     im = np.fliplr(im)
                     mask = np.fliplr(mask)
-                    masked = np.fliplr(masked)
                 #elif random.randint(1, 10) > 5:
                 #    for i in range(random.randint(1, 4)):
                 #        im = np.rot90(im)
@@ -161,16 +155,14 @@ class thyroidActualDataset(Dataset):
                     #cv2.imwrite(f'heatmaps/{name}.png', im)
             im = np.ascontiguousarray(im)
             mask = np.ascontiguousarray(mask)
-            masked = np.ascontiguousarray(masked)
         transforms = Compose([ToTensor()])
         im = transforms(im)
-        masked = transforms(masked)
         mask = torch.from_numpy(mask).long().view(256,256)
         #im_masked = transforms(im_masked)
         labels =  torch.from_numpy(labels)
         labels = labels.type(torch.LongTensor)
         #labels = torch.unsqueeze(labels, 0)
-        sample = {"image": im.float(), "mask": mask, "masked": masked.float(), "comp": labels[1], "echo": labels[2], "margin": labels[3], "calc": labels[4], "type": torch.unsqueeze(labels[0], 0), "filename": name}
+        sample = {"image": im.float(), "mask": mask, "comp": labels[1], "echo": labels[2], "margin": labels[3], "calc": labels[4], "type": torch.unsqueeze(labels[0], 0), "filename": name}
         return sample
 
 
@@ -184,38 +176,36 @@ class thyroidActualDataset(Dataset):
 #    def hook(model, input, output):
 #        features[name] = output.detach()
 #    return hook
-parameters_train = {
-        "batch_size": 8,
-        "shuffle": True,
-    }
-training_set = thyroidActualDataset('training')
-training_generator = torch.utils.data.DataLoader(training_set, **parameters_train)
-totiter = len(training_generator)
+
 def train_model():
     '''
     Function for training the model
     '''
     #device = torch.device("cuda:0" if use_cuda else "cpu")
+    parameters_train = {
+        "batch_size": 8,
+        "shuffle": True,
+    }
     parameters_test = {
         "batch_size": 1,
         "shuffle": False,
     }
+    training_set = thyroidActualDataset('training')
+    training_generator = torch.utils.data.DataLoader(training_set, **parameters_train)
+    totiter = len(training_generator)
     print("Training")
     #model = net()
-    model = CombNet_pool_type()
+    model = CombNet()
     model = model.to(device)
-    model.fc1.weight.requires_grad = False 
     print(model)
     criterion = torch.nn.CrossEntropyLoss(reduction="mean")
-    criterion2 = torch.nn.MSELoss()
     #criterion1 = torch.nn.BCELoss(reduction="mean")
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=0.00001)
-    #optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)
     #best_loss1 = float('inf')
     best_acc = 0.0
     best_epoch = -1
 
-    for epoch in range(EPOCHS):    
+    for epoch in range(170):    
         running_loss = 0.0
         #loss1_sum = 0.0 #attributes loss
         #loss2_sum = 0.0 # type loss
@@ -228,32 +218,19 @@ def train_model():
             y_echo = data["echo"]
             y_margin = data["margin"]
             y_calc = data["calc"]
-            x_masked = data["masked"]
-            y_type = data["type"]
-            x_train, y_mask, x_masked = (x_train.to(device), y_mask.to(device), x_masked.to(device))
-            y_comp, y_echo, y_margin, y_calc, y_type = (
+            #y_type = data["type"]
+            x_train, y_mask = (x_train.to(device), y_mask.to(device))
+            y_comp, y_echo, y_margin, y_calc = (
                 y_comp.to(device),
                 y_echo.to(device),
                 y_margin.to(device),
                 y_calc.to(device),
-                y_type.to(device)
             )
             optimizer.zero_grad()
-            masked_results = model(x_masked)
-            #masked_results = masked_results.detach()
-            linear_masked_features = masked_results[-2]
-            linear_masked_features = linear_masked_features.detach()
-            pred_mask, pred_comp, pred_echo, pred_margin, pred_calc, features, linear_features, pred_type = model(x_train)
-            #pred_class = torch.argmax(pred_mask, dim=1)
-            #pred_class = torch.unsqueeze(pred_class.detach(), 1)
-            #pred_class = pred_class.view((256,256))
-            #x_pred_masked = x_train * pred_class
-            #masked_results = model(x_pred_masked)
-            #masked_results = masked_results.detach()
-            #linear_masked_features = masked_results[-1]
-            #linear_masked_features = linear_masked_features.detach()
+
+            pred_mask, pred_comp, pred_echo, pred_margin, pred_calc = model(x_train)
             #print(y_mask.size())
-            if epoch > EPOCH_CLASSIFIER:
+            if epoch > 150:
             	#pred_comp = torch.unsqueeze(pred_comp, 1)
             	#pred_echo = torch.unsqueeze(pred_echo, 1)
             	#pred_margin = torch.unsqueeze(pred_margin, 1)
@@ -262,13 +239,12 @@ def train_model():
                 loss_e = criterion(pred_echo, y_echo)
                 loss_m = criterion(pred_margin, y_margin)
                 loss_ca = criterion(pred_calc, y_calc)
-                loss_p = criterion2(linear_masked_features,linear_features)
-                #loss2 = criterion1(pred_type.float(), y_type.float())
-                loss_a = loss_co + loss_e + loss_m + loss_ca + loss_p
+            	#loss2 = criterion1(target.float(), y_type.float())
+                loss_a = loss_co + loss_e + loss_m + loss_ca
             
             loss_b = criterion(pred_mask, y_mask)
             
-            if epoch > EPOCH_CLASSIFIER:
+            if epoch > 150:
                 loss = loss_a + loss_b
             else:
                 loss = loss_b
@@ -283,140 +259,190 @@ def train_model():
         val_acc = perform_test(model, thyroidActualDataset('val'), display=False)
 
 
-        if val_acc > best_acc and epoch > EPOCH_CLASSIFIER:
-            torch.save(model.state_dict(), PATH.replace("stanford", "stanford_running_loss"))
+        if val_acc > best_acc and epoch > 150:
+            torch.save(model.state_dict(), PATH.replace("_stanford", "_stanford_running_loss"))
             best_acc = val_acc
             best_epoch = epoch
 
         print('[%d] loss: %.3f' %
                   (epoch + 1, running_loss / totiter))
         
-        if epoch > EPOCH_CLASSIFIER:
-            print(loss_a, loss_b, loss_p)
+        if epoch > 150:
+            print(loss_a, loss_b)
         #print(loss1_sum, loss2_sum, running_loss)
         
     print("Training complete")
     torch.save(model.state_dict(), PATH)
     # Creating the Sankey plot
-    return model, best_epoch
+    """"
+    G = model.fc1.weight.data
+    G = G.cpu().numpy()
+    a = n_attributes
+    z = 1
+    source = [i % a for i in range(z*a)]
+    target = [(i // a) + a for i in range(z*a)]
+    '''
+    '''
+    value = G.flatten().tolist()
+    print(value)
+    color_node = [
+            #'#808080', '#808080', '#808080', '#808080', '#808080',
+            #'#808080', '#808080', '#808080', '#808080', '#808080',
+            #'#808080', '#808080', '#808080', '#808080', '#808080',
+            '#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#FF00FF',
+            '#00CED1', '#FF8C00', '#BDB76B', '#2F4F4F', '#B8860B',
+            '#149697', '#00AAC0', '#8080CC', '#333388', '#77CCCC'
+            ]
+    color_link = []
 
-def train_type(model):
-    for param in model.parameters():
-        param.requires_grad = False
+    color_link = ['#5d8aa8','#ffbf00','#e52b50','#9966cc',
+                  '#4b5320','#0d98ba','#480607','#cc5500',
+                  '#702963','#008b8b','#a52a2a','#004b49',
+                  '#b8860b','#ff4040','#00009c']
+    label = []
 
-    model.fc1.weight.requires_grad = True
-    print(model.fc1.weight)
-    weight = torch.Tensor([0.52]).to(device)
-    criterion1 = torch.nn.BCEWithLogitsLoss(reduction="sum", pos_weight=weight)
-    #criterion1 = FocalLoss(weights=class_weights,gamma=1, alpha=1)
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=0.001)
-    best_acc = 0.0
-    best_epoch = -1
+    attrib_names = ["cystic composition", "mostly solid composition", "solid composition", "spongiform composition",
+                    "hyperechogenicity", "hypoechogenicity", "isoechogenicity", "marked hypoechogenicity",
+                    "ill-defined margin", "microlobulated margin", "spiculated margin", "smooth margin",
+                    "macro calcification", "micro calcification", "no calcification"]
+    label = []
+    for i in range(len(source)):
+        label.append(f'{value[i]:.2f} | {attrib_names[i]}')
+    label.append("benign/ malignant")
 
-    for epoch in range(TYPE_EPOCHS):
-        running_loss = 0.0
-        #loss1_sum = 0.0 #attributes loss
-        #loss2_sum = 0.0 # type loss
-        model.train()
-        model.bn11.eval()
-        model.bn12.eval()
-        model.bn21.eval()
-        model.bn22.eval()
-        model.bn31.eval()
-        model.bn32.eval()
-        model.bn33.eval()
-        model.bn41.eval()
-        model.bn42.eval()
-        model.bn43.eval()
-        model.bn51.eval()
-        model.bn52.eval()
-        model.bn53.eval()
-        model.bn12d.eval()
-        model.bn21d.eval()
-        model.bn22d.eval()
-        model.bn31d.eval()
-        model.bn32d.eval()
-        model.bn33d.eval()
-        model.bn41d.eval()
-        model.bn42d.eval()
-        model.bn43d.eval()
-        model.bn51d.eval()
-        model.bn52d.eval()
-        model.bn53d.eval()
-        for batch_idx, data in tqdm(enumerate(training_generator), total=totiter):
-            
-            model.train(True)
-            model.bn11.eval()
-            model.bn12.eval()
-            model.bn21.eval()
-            model.bn22.eval()
-            model.bn31.eval()
-            model.bn32.eval()
-            model.bn33.eval()
-            model.bn41.eval()
-            model.bn42.eval()
-            model.bn43.eval()
-            model.bn51.eval()
-            model.bn52.eval()
-            model.bn53.eval()
-            model.bn12d.eval()
-            model.bn21d.eval()
-            model.bn22d.eval()
-            model.bn31d.eval()
-            model.bn32d.eval()
-            model.bn33d.eval()
-            model.bn41d.eval()
-            model.bn42d.eval()
-            model.bn43d.eval()
-            model.bn51d.eval()
-            model.bn52d.eval()
-            model.bn53d.eval() 
-           
-            x_train = data["image"]
-            y_mask = data["mask"]
-            y_comp = data["comp"]
-            y_echo = data["echo"]
-            y_margin = data["margin"]
-            y_calc = data["calc"]
-            x_masked = data["masked"]
-            y_type = data["type"]
-            x_train, y_mask, x_masked = (x_train.to(device), y_mask.to(device), x_masked.to(device))
-            y_comp, y_echo, y_margin, y_calc, y_type = (
-                y_comp.to(device),
-                y_echo.to(device),
-                y_margin.to(device),
-                y_calc.to(device),
-                y_type.to(device)
-            )
-            optimizer.zero_grad()
-            pred_mask, pred_comp, pred_echo, pred_margin, pred_calc, features, linear_features, pred_type = model(x_train)
-            loss2 = criterion1(pred_type.float(), y_type.float())
-            loss2.backward()
-            optimizer.step()
-            #model.fc1.weight.data = projection_simplex_sort(model.fc1.weight.data)
-            running_loss += loss2.item()
-            #loss1_sum = loss1_sum + loss_co.item() + loss_e.item() + loss_m.item() + loss_ca.item()
-            #loss2_sum += loss2.item()
+    fig = go.Figure(data=[go.Sankey(
+        node = dict(
+                pad = 15,
+                thickness = 20,
+                color = color_node,
+                label = label
+                ),
+        link = dict(
+                source = source,
+                target = target,
+                value = value,
+                color = color_link
+                ))])
+    fig.update_layout(title_text="Basic Sankey Diagram", font_size=18)
+    fig.show()
+    plotly.offline.plot(fig, filename=f'plot_1fc_CAM_{expt_num}.html')
 
-        val_acc = perform_test(model, thyroidActualDataset('val'), TiRADS=True,display=False)
+    """
 
-
-        if val_acc > best_acc:
-            torch.save(model.state_dict(), PATH.replace("stanford", "stanford_type_acc"))
-            best_acc = val_acc
-            best_epoch = epoch
-
-        print('[%d] loss: %.3f' %
-                  (epoch + 1, running_loss / totiter))
-
-        #print(loss1_sum, loss2_sum, running_loss)
-
-    print("Training complete")
-    print(model.fc1.weight)
-    torch.save(model.state_dict(), PATH.replace("stanford", "stanford_type"))
-    return best_epoch, model
+    '''
+    # Sankey plot preparation
+    G = model.fc1.weight.data
+    G = G.cpu().numpy()
+    #W = model.fc2.weight.data
+    a = n_attributes
+    z = 1
+    source = [i % a for i in range(z*a)]
+    target = [(i // a) + a for i in range(z*a)]
+    # Dropping very small weights
+    G[G < 0.05] = 0.0
+    value = G.flatten().tolist()
+    color_node = [
+              '#808080', '#808080', '#808080', '#808080', '#808080',
+              '#808080', '#808080', '#808080', '#808080', '#808080',
+              '#808080', '#808080', '#808080', '#808080', '#808080',
+              #'#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#FF00FF',
+              #'#00CED1', '#FF8C00', '#BDB76B', '#2F4F4F', '#B8860B'
+              ]
+    color_link = []
+    link_colors = ['#F08080', '#FFFACD', '#98FB98', '#87CEFA', '#FF0000', '#00CED1', '#FF8C00', '#BDB76B', '#2F4F4F', '#B8860B']
+    link_colors = link_colors * ((n_groups // len(link_colors)) + 1)
+    for i in range(a*z):
+        color_link.extend([link_colors[i % len(link_colors)]])
     
-def perform_test(model, dataset, TiRADS=False, display=False):
+    group_label = []
+    for i in range(1, n_groups + 1):
+        group_label.append("G" + str(i))
+    label = ["cystic_c", "mostly solid_c", "solid_c", "spongiform_c",
+            "hyper_e", "hypo_e", "iso_e", "marked_e",
+            "ill-defined_m", "micro_m", "spiculated_m", "smooth_m",
+            "macro_ca", "micro_ca", "non_ca"]
+    label.extend(group_label)
+
+    fig = go.Figure(data=[go.Sankey(
+        node = dict(
+          pad = 15,
+          thickness = 20,
+          color = color_node,
+          label = label
+        ),
+        link = dict(
+          source = source,
+          target = target,
+          value = value,
+          color = color_link
+      ))])
+    fig.update_layout(title_text="Basic Sankey Diagram", font_size=10)
+    fig.show()
+    plotly.offline.plot(fig, filename=f'plot1_{n_groups}_CAM_{expt_num}.html')
+
+    # Second Sankey plot from groups to type prediction
+    
+    source = [i % z for i in range(z*1)]
+    target = [(i // z) + z for i in range(z*1)] 
+    W = W.cpu().numpy()
+    value = W.flatten()
+
+    color_node = ['#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#FF00FF', '#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#FF00FF']
+    color_node = color_node * ((n_groups // len(color_node))+ 1)
+    color_link = []
+    link_pos_colors = ['#149697', '#00AAC0', '#8080CC', '#333388', '#77CCCC', '#149697', '#00AAC0', '#8080CC', '#333388', '#77CCCC']
+    link_neg_colors = ['#E65662', '#FF8066', '#894E3F', '#E79598', '#FDA45C', '#E65662', '#FF8066', '#894E3F', '#E79598', '#FDA45C']
+    
+    link_colors = []
+    label = []
+    # Coloring links according to +ve or negative and plotting the absolute values
+    for i in range(len(source)):
+        if value[i] < 0:
+            link_colors.append(link_neg_colors[i%10])
+        else:
+            link_colors.append(link_pos_colors[i%10])
+        label.append(str(value[i]) + "| G" + str(i+1))
+
+    label.append("benign/ malignant")
+    value = np.abs(value).tolist()
+    fig = go.Figure(data=[go.Sankey(
+        node = dict(
+          pad = 15,
+          thickness = 20,
+          color = color_node,
+          label = label,
+        ),
+        link = dict(
+          source = source,
+          target = target,
+          value = value,
+          color = link_colors
+      ))])
+    fig.update_layout(title_text="Basic Sankey Diagram", font_size=10)
+    fig.show()
+    plotly.offline.plot(fig, filename=f'plot2_{n_groups}_CAM_{expt_num}.html')
+    '''
+    return model, best_epoch
+'''
+def returnCAM(feature_conv, weight_linear, class_idx):
+    # generate the class activation maps upsample to 256x256
+    size_upsample = (256, 256)
+    bz, nc, h, w = feature_conv.shape
+    output_cam = []
+    for idx in class_idx:
+        cam = weight_linear[idx].dot(feature_conv.reshape((nc, h*w)))
+        cam = cam.reshape(h, w)
+        cam = cam - np.min(cam)
+        if (np.max(cam)) != 0:
+            cam_img = cam / (np.max(cam))
+        else:
+            cam_img = cam
+        cam_img = np.uint8(255 * cam_img)
+        output_cam.append(cv2.resize(cam_img, size_upsample))
+
+    return output_cam
+'''
+def perform_test(model, dataset, display=False):
     '''
     Function to perfrom test
     '''
@@ -439,13 +465,13 @@ def perform_test(model, dataset, TiRADS=False, display=False):
     totiter = len(test_generator)
     comp_correct = 0
     total = 0
-    tp = 0
-    fp = 0
-    fn = 0
-    tn = 0
     echo_correct = 0
     margin_correct = 0
     calc_correct = 0
+    tp = 0
+    fp = 0
+    tn = 0
+    fn = 0
     metric = JaccardIndex(task='multiclass', num_classes=2, ignore_index=None)
     type_correct = 0
     FEATS = []
@@ -468,8 +494,6 @@ def perform_test(model, dataset, TiRADS=False, display=False):
     rescale = torch.nn.Softmax()
     with torch.no_grad():
         print(model.training)
-        all_0 = True
-        all_1 = True
         for batch_idx, data in tqdm(enumerate(test_generator), total=totiter):
             x_test = data["image"]
             y_mask = data["mask"]
@@ -491,7 +515,6 @@ def perform_test(model, dataset, TiRADS=False, display=False):
             #FEATS.append(features['feats'].cpu().numpy())
             #attrib_list = [i for i in range(0, n_attributes)]
             # Fetching CAM
-            pred_type = torch.sigmoid(pred_type)
             loss_co = criterion(pred_comp, y_comp)
             loss_e = criterion(pred_echo, y_echo)
             loss_m = criterion(pred_margin, y_margin)
@@ -567,7 +590,6 @@ def perform_test(model, dataset, TiRADS=False, display=False):
                 margin_correct += 1
             if pred_calc_class == y_calc[0]:
                 calc_correct += 1
-            class_correctness = [comp_correct, echo_correct, margin_correct, calc_correct]
             if y_type[0] == pred_type[0]:
                 type_correct += 1
             if y_type == 1 and pred_type == 1:
@@ -578,13 +600,8 @@ def perform_test(model, dataset, TiRADS=False, display=False):
                 fn += 1
             if y_type == 0 and pred_type == 1:
                 fp += 1
-            if pred_type[0] == 0:
-                all_1 = False
-            if pred_type[0] == 1:
-                all_0 = False
-            if TiRADS == True:
-                print(data["filename"],y_type[0], pred_type[0])
-
+            print(y_type[0], pred_type[0])
+            class_correctness = [comp_correct, echo_correct, margin_correct, calc_correct]
             #y_test = y_test.astype(int)
             #predicted = predicted.astype(int)
             #errors = np.ones(15, dtype = int)
@@ -628,19 +645,12 @@ def perform_test(model, dataset, TiRADS=False, display=False):
     print(Per_class_IoU)
     class_correctness = [comp_correct/total, echo_correct/total, margin_correct/total, calc_correct/total]
     print(class_correctness)
-    print('Type Accuracy:')
-    print(type_correct / total)
+    #print('Type accuracy: %d %%' %(100 * type_correct / total))
+    #return Per_class_IoU + 0.25 * sum(class_correctness)
+    type_acc = 100 * type_correct / total
+    print(type_acc)
     print(tp/(tp+fp))
     print(tp/(tp+fn))
-    #print('Type accuracy: %d %%' %(100 * type_correct / total))
-    if TiRADS == False:
-    	return Per_class_IoU + 0.25 * sum(class_correctness)
-    else:
-        if not all_0 and not all_1:
-            return type_correct / total
-        else:
-            return 0.0
-    #type_acc = 100 * type_correct / type_total
     #FEATS = np.concatenate(FEATS)
     #print('- feats shape:', FEATS.shape)
     #with open("results_unmasked.txt", "a") as file1:
@@ -652,19 +662,13 @@ if __name__ == "__main__":
     #model, best_epoch = train_model()
     #print(best_epoch)
     #torch.use_deterministic_algorithms(True)
-    #model = CombNet_pool_type()
-    
-    #model = model.to(device)
-    #model.load_state_dict(torch.load(PATH.replace("stanford","stanford_running_loss")), strict=False)
-    #best_epoch , model = train_type(model)
-    #print(best_epoch) 
     model = CombNet_pool_type()
 
     model = model.to(device)
     model.load_state_dict(torch.load(PATH))
-    perform_test(model, thyroidActualDataset('test'), TiRADS=True, display=False)
+    #perform_test(model, thyroidActualDataset('test'), display=False)
     #perform_test(model, thyroidActualDataset('training'), display=False)
-    #perform_test(model, thyroidActualDataset('val'), display=False)
+    perform_test(model, thyroidActualDataset('all'), display=False)
 
 
 
