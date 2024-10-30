@@ -28,13 +28,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 import os
 import sys
-
+from VGG16 import VGG16
+from VGG16_pool import VGG16_pool
 # In[4]:
 
 n_attributes = 14
 n_groups = 4
 expt_num = sys.argv[1]
-PATH = f'../../data/models/attribs_no_mask_do_stanford_running_loss_running_reproduce_sampled.pt'
+PATH = f'../../data/models/mask_stanford_running_loss_pretrained_VGG.pt'
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_cuda else "cpu")    
 """
@@ -63,9 +64,9 @@ class thyroidActualDataset(Dataset):
             self.samples = []
             for case in self.cases:
                 case_num = case.split(',')[0]
-                files = glob.glob('/home/ahana/Stanford_thyroid/thyroidultrasoundcineclip/images/' + case_num + '*')
+                files = glob.glob('/home/aroychoudhury/Stanford_thyroid/thyroidultrasoundcineclip/images/' + case_num + '*')
                 case_data = case.split(',')[1:]
-                for file_name in files:
+                for file_name in files: #[:1]:
                     file_no_ext = file_name.split('.')[0]
                     case_frame = file_no_ext.split('/')[-1]
                     if split == 'training' and int(case_frame.split('_')[-1]) % 10 == 0:
@@ -119,8 +120,8 @@ class thyroidActualDataset(Dataset):
             #masked_im = cv2.resize(masked_im, dsize=(252, 252), interpolation=cv2.INTER_LINEAR)
             #cv2.imwrite('images_check/' + name + '.png', masked_im)
             #masked_im = masked_im[:,:,0]
-            im = np.zeros((252, 252, 3))
-            im1 = cv2.resize(im1, dsize=(252, 252), interpolation=cv2.INTER_CUBIC)
+            im = np.zeros((256, 256, 3))
+            im1 = cv2.resize(im1, dsize=(256, 256), interpolation=cv2.INTER_CUBIC)
             im[:220,:,:] = im1[:220,:,:]
             #cv2.imwrite('/home/ahana/test_stanford_images/' + name.split('/')[-1], im)
             #cv2.imwrite('images_check/' + name + '_orig.png', im)
@@ -173,9 +174,10 @@ class net(torch.nn.Module):
         model_layers.extend(list(self.model.features))
         self.model.features= nn.Sequential(*model_layers)
         self.model.avgpool = torch.nn.AdaptiveAvgPool2d((1, 1))
+        #self.model.avgpool = torch.nn.Identity()
         # modifying VGG-16 for CAM
         self.model.classifier = torch.nn.Sequential(torch.nn.Linear(512, 128))
-        self.dropout = nn.Dropout(p=0.2)
+        #self.dropout = nn.Dropout(p=0.2)
         self.rescale = torch.nn.Softmax()
         # Adding 2 layers for type prediction
 
@@ -197,7 +199,7 @@ class net(torch.nn.Module):
 
     def forward(self, x):
            
-        features = self.dropout(F.relu(self.model(x)))
+        features = F.relu(self.model(x))
         comp = F.relu(self.fc_comp1(features))
         comp_raw = self.fc_comp2(comp)
         comp = self.rescale(comp_raw)
@@ -250,16 +252,17 @@ def train_model():
     totiter = len(training_generator)
     print("Training")
     model = net()
-
+    #model = VGG16_pool()
     model = model.to(device)
     print(model)
     criterion = torch.nn.CrossEntropyLoss(reduction="mean")
     #criterion1 = torch.nn.BCELoss(reduction="mean")
     optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)
     #best_loss1 = float('inf')
-    best_running_loss = float('inf')
+    best_accuracy = 0.0
+    best_epoch = -1
 
-    for epoch in range(200):    
+    for epoch in range(170):    
         running_loss = 0.0
         #loss1_sum = 0.0 #attributes loss
         #loss2_sum = 0.0 # type loss
@@ -299,12 +302,13 @@ def train_model():
             #loss1_sum = loss1_sum + loss_co.item() + loss_e.item() + loss_m.item() + loss_ca.item()
             #loss2_sum += loss2.item()
             
-        val_running_loss = perform_test(model, thyroidActualDataset('val'), display=False)
+        val_accuracy = perform_test(model, thyroidActualDataset('val'), display=False)
 
 
-        if val_running_loss < best_running_loss:
+        if val_accuracy > best_accuracy:
             torch.save(model.state_dict(), PATH.replace("_stanford", "_stanford_running_loss"))
-            best_running_loss = val_running_loss
+            best_accuracy = val_accuracy
+            best_epoch = epoch
 
         print('[%d] loss: %.3f' %
                   (epoch + 1, running_loss / totiter))
@@ -402,7 +406,7 @@ def train_model():
             "macro_ca", "micro_ca", "non_ca"]
     label.extend(group_label)
 
-    fig = go.Figure(data=[go.Sankey(
+    fig = go.Figur(data=[go.Sankey(
         node = dict(
           pad = 15,
           thickness = 20,
@@ -461,7 +465,7 @@ def train_model():
     fig.show()
     plotly.offline.plot(fig, filename=f'plot2_{n_groups}_CAM_{expt_num}.html')
     '''
-    return model
+    return model, best_epoch
 '''
 def returnCAM(feature_conv, weight_linear, class_idx):
     # generate the class activation maps upsample to 256x256
@@ -642,7 +646,7 @@ def perform_test(model, dataset, display=False):
             #if y_type[0] == pred_type[0]:
             #    type_correct += 1
             rescale = torch.nn.Softmax()
-            print(data["filename"], pred_comp_class, pred_echo_class, pred_margin_class, pred_calc_class, comp_probs, echo_probs, margin_probs, calc_probs)
+            #print(data["filename"], pred_comp_class, pred_echo_class, pred_margin_class, pred_calc_class, comp_probs, echo_probs, margin_probs, calc_probs)
             #for i in range(15):
             #    class_correctness[i] = class_correctness[i] + 1 - errors[i]
             
@@ -652,8 +656,9 @@ def perform_test(model, dataset, display=False):
     print('Per class acuracy is: ')
     class_correctness = [comp_correct/total, echo_correct/total, margin_correct/total, calc_correct/total]
     print(class_correctness)
+    accuracy = sum(class_correctness)
     #print('Type accuracy: %d %%' %(100 * type_correct / total))
-    return running_loss
+    return accuracy
     #type_acc = 100 * type_correct / type_total
     #FEATS = np.concatenate(FEATS)
     #print('- feats shape:', FEATS.shape)
@@ -662,8 +667,9 @@ def perform_test(model, dataset, display=False):
 
 
 if __name__ == "__main__":
-    torch.use_deterministic_algorithms(True)
-    #model = train_model()
+    #torch.use_deterministic_algorithms(True)
+    #model, best_epoch = train_model()
+    #print(best_epoch)
     #torch.use_deterministic_algorithms(True)
     model = net()
 

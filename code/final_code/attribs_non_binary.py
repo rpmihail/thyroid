@@ -28,13 +28,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 import os
 import sys
-
+from VGG16 import VGG16
+from VGG16_pool import VGG16_pool
 # In[4]:
 
 n_attributes = 14
 n_groups = 4
 expt_num = sys.argv[1]
-PATH = f'../../data/models/attribs_no_mask_do_stanford_running_loss_running_reproduce_sampled.pt'
+PATH = f'../../data/models//mask_stanford_running_loss_pretrained_VGG.pt'
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_cuda else "cpu")    
 """
@@ -58,7 +59,7 @@ def projection_simplex_sort(v, z=1):
 
 class thyroidActualDataset(Dataset):
     def __init__(self, split):
-        with open('labels_new_' + split + '.txt') as f:
+        with open('labels_single_' + split + '.txt') as f:
             self.samples = f.read().splitlines()
         self.split = split
         #if len(self.samples) > 73:
@@ -87,7 +88,7 @@ class thyroidActualDataset(Dataset):
         # Reads actual images. If-else logic is leagacy and was used for cases where images were genereated.
         # Only the if code without condition is necessary now.
         if True: #int(name) < 100:
-            im_name = os.path.join('/home/ahana/thyroid/data/thyroid', name + '_1.jpg')
+            im_name = os.path.join('/home/aroychoudhury/thyroid_git/thyroid/data/images', name + '_1.jpg')
             im1 = cv2.imread(str(im_name))
             #mask = np.zeros(np.shape(im1))
             #for polygon in poly_data:
@@ -101,8 +102,8 @@ class thyroidActualDataset(Dataset):
             #masked_im = cv2.resize(masked_im, dsize=(252, 252), interpolation=cv2.INTER_LINEAR)
             #cv2.imwrite('images_check/' + name + '.png', masked_im)
             #masked_im = masked_im[:,:,0]
-            im = np.zeros((252, 252, 3))
-            im1 = cv2.resize(im1, dsize=(252, 252), interpolation=cv2.INTER_CUBIC)
+            im = np.zeros((256, 256, 3))
+            im1 = cv2.resize(im1, dsize=(256, 256), interpolation=cv2.INTER_CUBIC)
             im[:,40:210,:] = im1[:,40:210,:]
             #cv2.imwrite('images_check/' + name + '_orig.png', im)
         else:
@@ -153,9 +154,10 @@ class net(torch.nn.Module):
         model_layers.extend(list(self.model.features))
         self.model.features= nn.Sequential(*model_layers)
         self.model.avgpool = torch.nn.AdaptiveAvgPool2d((1, 1))
+        
+        #self.model.avgpool = torch.nn.Identity()
         # modifying VGG-16 for CAM
         self.model.classifier = torch.nn.Sequential(torch.nn.Linear(512, 128))
-        self.dropout = nn.Dropout(p=0.2)
         self.rescale = torch.nn.Softmax()
         # Adding 2 layers for type prediction
 
@@ -177,7 +179,7 @@ class net(torch.nn.Module):
 
     def forward(self, x):
            
-        features = self.dropout(F.relu(self.model(x)))
+        features = F.relu(self.model(x))
         comp = F.relu(self.fc_comp1(features))
         comp_raw = self.fc_comp2(comp)
         comp = self.rescale(comp_raw)
@@ -229,8 +231,8 @@ def train_model():
     training_generator = torch.utils.data.DataLoader(training_set, **parameters_train)
     totiter = len(training_generator)
     print("Training")
-    model = net()
-
+    #model = net()
+    model = VGG16()
     model = model.to(device)
     print(model)
     criterion = torch.nn.CrossEntropyLoss(reduction="mean")
@@ -622,7 +624,7 @@ def perform_test(model, dataset, display=False):
             #if y_type[0] == pred_type[0]:
             #    type_correct += 1
             rescale = torch.nn.Softmax()
-            print(data["filename"], pred_comp_class, pred_echo_class, pred_margin_class, pred_calc_class, comp_probs, echo_probs, margin_probs, calc_probs)
+            #print(data["filename"], pred_comp_class, pred_echo_class, pred_margin_class, pred_calc_class, comp_probs, echo_probs, margin_probs, calc_probs)
             #for i in range(15):
             #    class_correctness[i] = class_correctness[i] + 1 - errors[i]
             
@@ -642,7 +644,7 @@ def perform_test(model, dataset, display=False):
 
 
 if __name__ == "__main__":
-    torch.use_deterministic_algorithms(True)
+    #torch.use_deterministic_algorithms(True)
     #model = train_model()
     #torch.use_deterministic_algorithms(True)
     model = net()

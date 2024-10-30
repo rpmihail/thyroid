@@ -21,8 +21,8 @@ from unet_models import UNet_encoder
 import pandas as pd
 
 all_data = []
-compositions = {'Unknown':0, 'cystic':1, 'predominantly cystic':0,
-        'predominantly solid':0, 'dense':0,
+compositions = {'Unknown':0, 'cystic':1, 'predominantly cystic':1,
+        'predominantly solid':3, 'dense':0,
                 'solid':3, 'spongiform appareance':1, 'spongiform': 1}
 echogenicities = {'Unknown':0, 'hyperechogenicity':2, 'hyperechogenecity':2,
         'hypoechogenicity':3, 'hypoechogenecity':3, 'isoechogenicity':2,
@@ -31,7 +31,7 @@ margins = {'Unknown':0, 'ill- defined':1, 'ill defined':1, 'microlobulated':2,
         'spiculated':2, 'well defined smooth':1, 'well defined': 1, 'macrolobulated': 2, 'extra-thyroidal extension': 3}
 calcifications = {'macrocalcification':1, 'macrocalcifications':1, 'microcalcification':3, 'microcalcifications':3, 'non':0, 'rim-calcifications': 2}
 types ={'benign':0, 'malign':1}
-root_dir=Path('../../data/thyroid')
+root_dir=Path('/home/aroychoudhury/thyroid/data/thyroid')
 files = list(root_dir.glob("*.xml"))
 data_list = list(files)
 all_data.extend(data_list)

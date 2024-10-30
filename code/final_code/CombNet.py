@@ -181,4 +181,4 @@ class CombNet(nn.Module):
         x11d = self.conv11d(x12d)
 
         #return x11d
-        return x11d, comp_raw, echo_raw, margin_raw, calc_raw
+        return x11d, comp_raw, echo_raw, margin_raw, calc_raw, x5p, features

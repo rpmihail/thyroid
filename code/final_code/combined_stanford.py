@@ -38,11 +38,11 @@ from CombNet_pool import CombNet_pool
 n_attributes = 14
 n_groups = 4
 expt_num = sys.argv[1]
-PATH = f'../../data/models/stanford_running_loss_combined_P_loss_reproduce_sampled.pt'
+PATH = f'../../data/models/stanford_running_loss_combined_pool_segment_wt_P_loss_pred_reproduce_sampled.pt'
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_cuda else "cpu")    
 EPOCHS = 170
-EPOCH_CLASSIFIER = 149
+EPOCH_CLASSIFIER = 150
 """
 def projection_simplex_sort(v, z=1):
     '''
@@ -212,7 +212,7 @@ def train_model():
     totiter = len(training_generator)
     print("Training")
     #model = net()
-    model = CombNet()
+    model = CombNet_pool()
     model = model.to(device)
     print(model)
     criterion = torch.nn.CrossEntropyLoss(reduction="mean")
@@ -251,6 +251,14 @@ def train_model():
             linear_masked_features = masked_results[-1]
             linear_masked_features = linear_masked_features.detach()
             pred_mask, pred_comp, pred_echo, pred_margin, pred_calc, features, linear_features = model(x_train)
+            #pred_class = torch.argmax(pred_mask, dim=1)
+            #pred_class = torch.unsqueeze(pred_class.detach(), 1)
+            #pred_class = pred_class.view((256,256))
+            #x_pred_masked = x_train * pred_class
+            #masked_results = model(x_pred_masked)
+            #masked_results = masked_results.detach()
+            #linear_masked_features = masked_results[-1]
+            #linear_masked_features = linear_masked_features.detach()
             #print(y_mask.size())
             if epoch > EPOCH_CLASSIFIER:
             	#pred_comp = torch.unsqueeze(pred_comp, 1)
@@ -268,7 +276,7 @@ def train_model():
             loss_b = criterion(pred_mask, y_mask)
             
             if epoch > EPOCH_CLASSIFIER:
-                loss = loss_a + loss_b
+                loss = loss_a + 2 * loss_b
             else:
                 loss = loss_b
 
@@ -666,7 +674,7 @@ if __name__ == "__main__":
     #model, best_epoch = train_model()
     #print(best_epoch)
     #torch.use_deterministic_algorithms(True)
-    model = CombNet()
+    model = CombNet_pool()
 
     model = model.to(device)
     model.load_state_dict(torch.load(PATH))

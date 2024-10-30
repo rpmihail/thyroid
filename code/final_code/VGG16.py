@@ -139,8 +139,8 @@ class VGG16(nn.Module):
         x52 = F.relu(self.bn52(self.conv52(x51)))
         x53 = F.relu(self.bn53(self.conv53(x52)))
         x5p, id5 = F.max_pool2d(x53,kernel_size=2, stride=2,return_indices=True)
-        x5p = torch.flatten(x5p, start_dim=1)
-        features = F.relu(self.classifier(x5p))
+        x5pf = torch.flatten(x5p, start_dim=1)
+        features = F.relu(self.classifier(x5pf))
         comp = F.relu(self.fc_comp1(features))
         comp_raw = self.fc_comp2(comp)
         #comp = self.rescale(comp_raw)
@@ -185,4 +185,4 @@ class VGG16(nn.Module):
         '''
 
         #return x11d
-        return comp_raw, echo_raw, margin_raw, calc_raw
+        return comp_raw, echo_raw, margin_raw, calc_raw, x5p, features

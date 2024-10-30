@@ -21,7 +21,7 @@ from unet_models import UNet_encoder
 import pandas as pd
 
 all_data = []
-file1 = open('/home/ahana/Stanford_thyroid/thyroidultrasoundcineclip/metadata.csv', 'r')
+file1 = open('/home/aroychoudhury/Stanford_thyroid/thyroidultrasoundcineclip/metadata.csv', 'r')
 all_data = file1.readlines()
 all_data = all_data[1:]
 random.shuffle(all_data)

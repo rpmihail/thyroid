@@ -33,12 +33,13 @@ from VGG16 import VGG16
 from SegNet import SegNet
 from CombNet import CombNet
 from CombNet_pool import CombNet_pool
+from CombNet_pool_type import CombNet_pool_type
 # In[4]:
 
 n_attributes = 14
 n_groups = 4
 expt_num = sys.argv[1]
-PATH = f'../../data/models/segment_stanford_running_loss_combined_pool_reproduce_sampled.pt'
+PATH = f'../../data/models/stanford_type_acc_combined_pool_P_loss_reproduce_sampled_62.pt'
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_cuda else "cpu")    
 """
@@ -75,7 +76,7 @@ class thyroidActualDataset(Dataset):
                     if split == 'training' and int(case_frame.split('_')[-1]) % 10 == 0:
                         sample = case.replace(case_num, file_name)
                         self.samples.append(sample)
-                    elif split != 'training': #and int(case_frame.split('_')[-1]) % 10 == 0:
+                    elif split != 'training' and int(case_frame.split('_')[-1]) % 10 == 0:
                         sample = case.replace(case_num, file_name)
                         self.samples.append(sample)
                     
@@ -175,8 +176,9 @@ class thyroidActualDataset(Dataset):
         sample = {"image": im.float(), "mask": mask, "comp": labels[1], "echo": labels[2], "margin": labels[3], "calc": labels[4], "type": torch.unsqueeze(labels[0], 0), "filename": name}
         return sample
 
-def save_activations(image_name, weights, features, linear_features, pool=True):
-    print(image_name)
+def save_activations(image_name, x_test, y_mask, weights, features, linear_features, pool=True):
+    image_name = image_name[0].split('/')[-1]
+    image_name = image_name.split('.')[0]
     linear_features = linear_features.detach().cpu().numpy()
     weights = weights.detach().cpu().numpy()
     features = features.detach().cpu().numpy()
@@ -199,7 +201,9 @@ def save_activations(image_name, weights, features, linear_features, pool=True):
 
     else:
         output_cam = []
-        for idx in range(linear_features.shape[1]):
+        #for idx in range(linear_features.shape[1]):
+        if True:
+            idx = 36
             if linear_features[0][idx] > 0:
                 cam = weights[idx].dot(features.reshape((512, 8*8)))
                 cam = cam.reshape(8,8)
@@ -208,19 +212,31 @@ def save_activations(image_name, weights, features, linear_features, pool=True):
                     cam_img = cam / (np.max(cam))
                 else:
                     cam_img = cam
+                x_test = x_test.cpu().numpy()
+                #x_test = x_test * 255
+                y_mask = y_mask.cpu().numpy()
                 cam_img = np.uint8(255 * cam_img)
                 output_cam.append(cv2.resize(cam_img, (256, 256)))
-    
-        result = np.array(output_cam)
-        cam_img = np.sum(result,axis=0)
-        cam_img = cam_img - np.min(cam_img)
-        if (np.max(cam_img)) != 0:
-            cam_img = cam_img / (np.max(cam_img))
-        cam_img = np.uint8(255 * cam_img)
-        output_img = cv2.resize(cam_img, (256, 256))
+                heatmap = cv2.applyColorMap(cv2.resize(output_cam[0],(256, 256)), cv2.COLORMAP_JET)
+                result = heatmap * 0.2 + np.repeat(np.reshape(x_test, (256, 256)).reshape(256, 256, 1), 3, axis=2)
+                img_m = np.zeros((256, 256, 3))
+                gray_img_m = x_test * y_mask
+                #gray_img_m = gray_img_m.cpu().numpy()
+                img_m[:, :, 0] = gray_img_m
+                img_m[:, :, 1] = gray_img_m
+                img_m[:, :, 2] = gray_img_m
+                #img_m = img_m * 255
+                result = cv2.hconcat([result, img_m])
+                cv2.imwrite(f'activation_pool_PLoss_{idx}/{image_name}.png', result)
+        #result = np.array(output_cam)
+        #cam_img = np.sum(result,axis=0)
+        #cam_img = cam_img - np.min(cam_img)
+        #if (np.max(cam_img)) != 0:
+        #    cam_img = cam_img / (np.max(cam_img))
+        #cam_img = np.uint8(255 * cam_img)
+        #output_img = cv2.resize(output_cam[0], (256, 256))
 
-    print(output_img.shape)
-    cv2.imwrite(image_name[0].replace('images','activation_pool_combined'), output_img)
+    #cv2.imwrite(image_name[0].replace('images','activation_pool_PLoss'), output_img)
 
 def perform_test(model, dataset, display=False):
     '''
@@ -234,39 +250,9 @@ def perform_test(model, dataset, display=False):
         "batch_size": 1,
         "shuffle": False,
     }
-    '''
-    G = model.fc1.weight.data
-    G = G.cpu().numpy()
-    value = G.flatten().tolist()
-    print(value)
-    '''
     test_set = dataset
     test_generator = torch.utils.data.DataLoader(test_set, **parameters_test) 
     totiter = len(test_generator)
-    comp_correct = 0
-    total = 0
-    echo_correct = 0
-    margin_correct = 0
-    calc_correct = 0
-    metric = JaccardIndex(task='multiclass', num_classes=2, ignore_index=None)
-    #type_correct = 0
-    FEATS = []
-    features = {}
-    accuracy = []
-    criterion = torch.nn.CrossEntropyLoss(reduction="mean")
-    #criterion1 = torch.nn.BCELoss(reduction="mean")
-    # Code for extracting features for CAM
-    '''
-    def get_features(name):
-        def hook(model, input, output):
-            features[name] = output.detach()
-        return hook
-    '''
-    #model.model.features.register_forward_hook(get_features('feats'))
-    #weight_linear = np.squeeze(model.model.classifier[0].weight.detach().cpu().numpy())
-    running_loss = 0.0
-    #loss1_sum = 0.0 #attributes loss
-    #loss2_sum = 0.0
     rescale = torch.nn.Softmax()
     with torch.no_grad():
         print(model.training)
@@ -286,137 +272,11 @@ def perform_test(model, dataset, display=False):
             )
             x_test, y_mask = (x_test.to(device), y_mask.to(device))
             #print(x_test)
-            pred_mask, pred_comp, pred_echo, pred_margin, pred_calc, features, linear_features = model(x_test)
+            pred_mask, pred_comp, pred_echo, pred_margin, pred_calc, features, linear_features, pred_type = model(x_test)
             #FEATS.append(features['feats'].cpu().numpy())
             #attrib_list = [i for i in range(0, n_attributes)]
             # Fetching CAM
-            save_activations(data["filename"], model.classifier.weight, features, linear_features)
-            loss_co = criterion(pred_comp, y_comp)
-            loss_e = criterion(pred_echo, y_echo)
-            loss_m = criterion(pred_margin, y_margin)
-            loss_ca = criterion(pred_calc, y_calc)
-            #loss2 = criterion1(pred_type.float(), y_type.float())
-            loss_a = loss_co + loss_e + loss_m + loss_ca
-            loss_b = criterion(pred_mask, y_mask)
-            loss = loss_a + loss_b
-            running_loss += loss.item()
-            pred_class = torch.argmax(pred_mask, dim=1)
-            pred_class = pred_class.view((256,256))
-            pred_class[pred_class==1]=255
-            #name = data["filename"][0]
-            #cv2.imwrite(name.replace("images", "pred_masks"), pred_class.cpu().numpy())
-
-            accuracy.append(metric(pred_mask.cpu(), y_mask.cpu()))
-            #loss1_sum = loss1_sum + loss_co.item() + loss_e.item() + loss_m.item() + loss_ca.item()
-            #loss2_sum += loss2.item()
-            '''
-            CAMs = returnCAM(FEATS[-1], weight_linear, attrib_list)
-            img = np.zeros((252, 252, 3))
-            gray_img = data["image"].cpu().numpy()
-            gray_img = gray_img[0,0,:,:]
-            img[:, :, 0] = gray_img
-            img[:, :, 1] = gray_img
-            img[:, :, 2] = gray_img
-            # img = img * 255
-            height, width, c = img.shape
-            '''
-            comp_probs = rescale(pred_comp).detach().cpu().numpy()
-            echo_probs = rescale(pred_echo).detach().cpu().numpy()
-            margin_probs = rescale(pred_margin).detach().cpu().numpy()
-            calc_probs = rescale(pred_calc).detach().cpu().numpy()
-            pred_comp = pred_comp.detach().cpu().numpy()
-            pred_comp = pred_comp.flatten()
-            pred_echo = pred_echo.detach().cpu().numpy()
-            pred_echo = pred_echo.flatten()
-            pred_margin = pred_margin.detach().cpu().numpy()
-            pred_margin = pred_margin.flatten()
-            pred_calc = pred_calc.detach().cpu().numpy()
-            pred_calc = pred_calc.flatten()
-            #pred_type = pred_type.detach().cpu().numpy()
-            #pred_type = pred_type.flatten()
-            pred_comp_class = np.argmax(pred_comp)
-            pred_echo_class = np.argmax(pred_echo)
-            pred_margin_class = np.argmax(pred_margin)
-            pred_calc_class = np.argmax(pred_calc)
-            #print(np.multiply(predicted,value))
-            #print(np.sum(np.multiply(predicted,value)))
-            #y_type = y_type.detach().cpu().numpy()
-            #y_type = y_type.flatten()
-            y_comp = y_comp.detach().cpu().numpy()
-            y_comp = y_comp.flatten()
-            y_echo = y_echo.detach().cpu().numpy()
-            y_echo = y_echo.flatten()
-            y_margin = y_margin.detach().cpu().numpy()
-            y_margin = y_margin.flatten()
-            y_calc = y_calc.detach().cpu().numpy()
-            y_calc = y_calc.flatten()
-            #predicted[predicted < 0.5] = 0.0
-            #predicted[predicted >= 0.5] = 1.0
-            #pred_type[pred_type < 0.5] = 0.0
-            #pred_type[pred_type >= 0.5] = 1.0
-            #total += 15
-            total += 1
-            #pred_type = pred_type.astype(int)
-            #y_type = y_type.astype(int)
-            if pred_comp_class == y_comp[0]:
-                comp_correct += 1
-            if pred_echo_class == y_echo[0]:
-                echo_correct += 1
-            if pred_margin_class == y_margin[0]:
-                margin_correct += 1
-            if pred_calc_class == y_calc[0]:
-                calc_correct += 1
-            class_correctness = [comp_correct, echo_correct, margin_correct, calc_correct]
-            #y_test = y_test.astype(int)
-            #predicted = predicted.astype(int)
-            #errors = np.ones(15, dtype = int)
-            #errors[predicted == y_test] = 0
-            #correct = correct + 15 - np.sum(errors)
-            # CAM image is saved only if presence of attribute is correctly predicted
-            '''
-            for i in range(0, n_attributes):
-                if predicted[i] != y_test[i] or y_test[i] != 1:
-                    continue
-                heatmap = cv2.applyColorMap(cv2.resize(CAMs[i],(width, height)), cv2.COLORMAP_JET)
-                result = heatmap * 0.4 + img
-                img_m = np.zeros((252, 252, 3))
-                gray_img_m = data["im_masked"].cpu().numpy()
-                img_m[:, :, 0] = gray_img_m
-                img_m[:, :, 1] = gray_img_m
-                img_m[:, :, 2] = gray_img_m
-                img_m = img_m * 255
-                result = cv2.hconcat([result, img_m])
-                cv2.imwrite(f'heatmaps{expt_num}/{file_name}_{i}.png', result)
-            '''
-            '''
-            if display==True:
-                #print(y_type[0], pred_type[0])
-                print(pred_comp_class, pred_echo_class, pred_margin_class, pred_calc_class)
-                print(y_comp, y_echo, y_margin, y_calc)
-            #if y_type[0] == pred_type[0]:
-            #    type_correct += 1
-            rescale = torch.nn.Softmax()
-            #print(data["filename"], pred_comp_class, pred_echo_class, pred_margin_class, pred_calc_class, comp_probs, echo_probs, margin_probs, calc_probs)
-            #for i in range(15):
-            #    class_correctness[i] = class_correctness[i] + 1 - errors[i]
-            '''
-    #print('Accuracy of the network on the test images: %d %%' % (100 * correct / total))
-    #accuracy = 100 * correct / total
-    print(running_loss)
-    print('Per class acuracy is: ')
-    IoUs = np.array(accuracy)
-    Per_class_IoU = np.mean(IoUs, axis=0)
-    #miou = np.mean(Per_class_IoU, axis=0)
-    print(Per_class_IoU)
-    class_correctness = [comp_correct/total, echo_correct/total, margin_correct/total, calc_correct/total]
-    print(class_correctness)
-    #print('Type accuracy: %d %%' %(100 * type_correct / total))
-    return Per_class_IoU + 0.25 * sum(class_correctness)
-    #type_acc = 100 * type_correct / type_total
-    #FEATS = np.concatenate(FEATS)
-    #print('- feats shape:', FEATS.shape)
-    #with open("results_unmasked.txt", "a") as file1:
-    #    file1.write(str(n_groups) + '   ' + str(type_acc) + '  ' + str(accuracy) + '\n')
+            save_activations(data["filename"], x_test, y_mask, model.classifier.weight, features, linear_features)
 
 
 if __name__ == "__main__":
@@ -424,7 +284,7 @@ if __name__ == "__main__":
     #model, best_epoch = train_model()
     #print(best_epoch)
     #torch.use_deterministic_algorithms(True)
-    model = CombNet_pool()
+    model = CombNet_pool_type()
 
     model = model.to(device)
     model.load_state_dict(torch.load(PATH))
