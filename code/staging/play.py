@@ -22,8 +22,9 @@ import matplotlib.pyplot as plt
 
 from thyroid_dataset import *
 from patchify import patchify
-    
-batch_size = 8
+from stanford_dataset import *
+
+batch_size = 16
     
 # Dataset creation
 parameters_train = {
@@ -36,19 +37,25 @@ parameters_test = {
     "shuffle": False,
 }
 
-training_set = thyroidDataset(split='train')
+if sys.argv[1] == 'TDID':
+    training_set = thyroidDataset(split='train')
+    testing_set = thyroidDataset(split='test')
+else:
+    training_set = thyroidActualDataset(split='training')
+    testing_set = thyroidActualDataset(split='test')
+
 training_generator = torch.utils.data.DataLoader(training_set, **parameters_train, sampler=torch.utils.data.WeightedRandomSampler(training_set.sample_weights, len(training_set.cases), replacement=False))
 
-testing_set = thyroidDataset(split='test')
+#testing_set = thyroidDataset(split='test')
 testing_generator = torch.utils.data.DataLoader(testing_set, **parameters_test, sampler=torch.utils.data.WeightedRandomSampler(testing_set.sample_weights, len(testing_set.cases), replacement=False))
 
 # %%
 
 ## test dataloader
-patch_nr = 0
-for item in training_generator:
-    continue
-    break
+#patch_nr = 0
+#for item in training_generator:
+#    continue
+#    break
 # %%
 
 
@@ -155,7 +162,7 @@ model = Net().to(device)
 x = torch.randn(2, 1, 256, 256).to(device) # Dummy images
 print(np.shape(model(x))) # torch.Size([7, 49, 16])
 
-N_EPOCHS = 100000
+N_EPOCHS = 20
 LR = 0.001
 
 # %%
@@ -195,7 +202,7 @@ for epoch in range(N_EPOCHS):
         loss.backward()
         optimizer.step()
 
-        print(f"Epoch {epoch + 1}/{N_EPOCHS} loss: {loss:.10f}", end="\n")
+    print(f"Epoch {epoch + 1}/{N_EPOCHS} loss: {train_loss:.10f}", end="\n")
         
 # %%
 
@@ -240,15 +247,15 @@ coords = np.zeros((0, 2))
 labels = np.zeros((0))
 
 
-for bootstrap in range(200):
+for bootstrap in range(20):
+    print(bootstrap)
     for batch in testing_generator:
         x, y = batch["images"], batch["scores"]
         x, y = x.to(device), y.to(device)
-           
         y_hat = model(x)
         
         coords = np.concatenate((coords, y_hat.detach().cpu().numpy()))
-        labels = np.concatenate( (labels, batch["labels"][:, 19].detach().cpu().numpy()) ) 
+        labels = np.concatenate( (labels, batch["labels"][:, -1].detach().cpu().numpy()) ) 
         #print(y_hat)
     
 
@@ -270,7 +277,8 @@ labels = np.zeros((0))
 
 
 #for batch in training_generator:
-for bootstrap in range(20):
+for bootstrap in range(2):
+    print(bootstrap)
     for batch in training_generator:
         x, y = batch["images"], batch["scores"]
         x, y = x.to(device), y.to(device)
@@ -279,7 +287,7 @@ for bootstrap in range(20):
         
         coords = np.concatenate((coords, y_hat.detach().cpu().numpy()))
         scores = np.concatenate((scores, y.detach().cpu().numpy()))
-        labels = np.concatenate( (labels, batch["labels"][:, 19].detach().cpu().numpy()) ) 
+        labels = np.concatenate( (labels, batch["labels"][:, -1].detach().cpu().numpy()) ) 
         #print(y_hat)
     
 
